@@ -21,13 +21,14 @@ class TelegramBot:
         with open(whitelist_path, "r") as f:
             self.whitelist = json.load(f)
 
-    def check_access(self, handler_func):
-        def wrapper(self, update, context):
+    @staticmethod
+    def check_access(func):
+        async def wrapper(self, update, context, *args, **kwargs):
             user_id = str(update.effective_user.id)
             if user_id not in self.whitelist:
-                update.message.reply_text("前面的区域以后再来探索吧:)")
+                await update.message.reply_text("前面的区域以后再来探索吧:)")
                 return
-            return handler_func(self, update, context)
+            return await func(self, update, context, *args, **kwargs)
         return wrapper
 
     def check_working_time(self):
