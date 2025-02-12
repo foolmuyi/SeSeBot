@@ -121,6 +121,11 @@ class TelegramBot:
             traceback.print_exc()
             await update.effective_message.reply_text('Error:\n' + str(e))
 
+    async def ping_command(self, update, context):
+        user_id = str(update.effective_message.from_user.id)
+        chat_id = str(update.effective_message.chat.id)
+        await update.message.reply_text(f"Pong! 你的userid是{user_id}，当前chatid是{chat_id}")
+
     async def handle_message(self, update, context):
         user_id = str(update.effective_message.from_user.id)
         if user_id not in self.whitelist:
@@ -167,6 +172,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('start', self.start_command))
         self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
+        self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(MessageHandler(filters.TEXT, self.handle_message))
 
     async def job_wrapper(self, context):
