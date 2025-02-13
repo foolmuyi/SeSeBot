@@ -164,17 +164,22 @@ class TelegramBot:
                 for chunk in get_ai_response(self.aichat_contexts[chat_id]):
                     full_text += chunk
                     if (len(full_text) > 4096) and (len(full_text) <= (len(chunk) + 4096)):
-                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=full_text[4096:], 
+                        try:
+                            await fast_reply.edit_text(text=full_text[:4096], parse_mode='Markdown')
+                        except:
+                            await fast_reply.edit_text(text=full_text[:4096])
+                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=('-' + full_text[4096:]), 
                             reply_to_message_id=message_id)
                         continue
-                    if len(chunk) > 100 or '\n' in chunk:
+                    if len(chunk) > 50 or '\n' in chunk:
                         reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
                         try:
                             await fast_reply.edit_text(text=reply_text, parse_mode='Markdown')
                         except:
                             await fast_reply.edit_text(text=reply_text)
-                        time.sleep(0.5)
+                        time.sleep(1)
                 reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
+                reply_text += '\n[END]'
                 try:
                     await fast_reply.edit_text(text=reply_text, parse_mode='Markdown')
                 except:
