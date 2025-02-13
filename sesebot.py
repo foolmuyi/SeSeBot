@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import time
 import traceback
 from pixiv import *
 from aichat import *
@@ -148,7 +149,9 @@ class TelegramBot:
 
             if update.effective_message.reply_to_message and update.effective_message.reply_to_message.from_user.id == context.bot.id:
                 chat_id = str(update.effective_message.chat.id)
-                fast_reply = await update.effective_message.reply_text("容我想想...")
+                message_id = update.effective_message.message_id
+                fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=("容我想想..."), 
+                    reply_to_message_id=message_id)
                 if chat_id not in self.aichat_contexts.keys():
                     self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
                 self.aichat_contexts[chat_id].append({"role": "user", "content": update.effective_message.text})
@@ -157,12 +160,26 @@ class TelegramBot:
                     self.aichat_contexts[chat_id] = self.aichat_contexts[chat_id][1:]
                     est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 print('Waiting for LLM response...')
-                aichat_response = get_ai_response(self.aichat_contexts[chat_id])
+                full_text = ''
+                for chunk in get_ai_response(self.aichat_contexts[chat_id]):
+                    full_text += chunk
+                    if (len(full_text) > 4096) and (len(full_text) <= (len(chunk) + 4096)):
+                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=full_text[4096:], 
+                            reply_to_message_id=message_id)
+                        continue
+                    if len(chunk) > 100 or '\n' in chunk:
+                        reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
+                        try:
+                            await fast_reply.edit_text(text=reply_text, parse_mode='Markdown')
+                        except:
+                            await fast_reply.edit_text(text=reply_text)
+                        time.sleep(0.5)
+                reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
                 try:
-                    await fast_reply.edit_text(text=aichat_response, parse_mode='Markdown')
+                    await fast_reply.edit_text(text=reply_text, parse_mode='Markdown')
                 except:
-                    await fast_reply.edit_text(text=aichat_response)
-                self.aichat_contexts[chat_id].append({"role": "assistant", "content": aichat_response})
+                    await fast_reply.edit_text(text=reply_text)
+                self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
             else:
                 pass
         except Exception as e:
