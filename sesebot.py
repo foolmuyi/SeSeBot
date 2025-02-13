@@ -172,15 +172,18 @@ class TelegramBot:
                     full_text += chunk
                     buffer_text += chunk
                     if ((len(full_text) - len(buffer_text)) <= 4096) and (len(full_text) > 4096):
-                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=('-' + buffer_text), 
+                        await self.edit_reply(fast_reply, full_text[:4096])
+                        time.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
+                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=('-' + full_text[4096:]), 
                             reply_to_message_id=message_id)
+                        time.sleep(1.5)
                         buffer_text = ''
                         continue
-                    if len(buffer_text) > 50:
+                    if len(buffer_text) > 100:
                         reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
                         await self.edit_reply(fast_reply, reply_text)
                         buffer_text = ''
-                        time.sleep(1.5)
+                        time.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
                 reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
                 reply_text += '\n[END]'
                 await self.edit_reply(fast_reply, reply_text)
