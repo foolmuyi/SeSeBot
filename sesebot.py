@@ -97,6 +97,12 @@ class TelegramBot:
             traceback.print_exc()
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
 
+    async def edit_reply(self, reply_message, reply_text):
+        try:
+            await reply_message.edit_text(text=reply_text, parse_mode='Markdown')
+        except:
+            await reply_message.edit_text(text=reply_text)
+
     @check_access
     async def start_command(self, update, context):
         chat_id = str(update.message.chat.id)
@@ -161,29 +167,23 @@ class TelegramBot:
                     est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 print('Waiting for LLM response...')
                 full_text = ''
+                buffer_text = ''
                 for chunk in get_ai_response(self.aichat_contexts[chat_id]):
                     full_text += chunk
-                    if (len(full_text) > 4096) and (len(full_text) <= (len(chunk) + 4096)):
-                        try:
-                            await fast_reply.edit_text(text=full_text[:4096], parse_mode='Markdown')
-                        except:
-                            await fast_reply.edit_text(text=full_text[:4096])
-                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=('-' + full_text[4096:]), 
+                    buffer_text += chunk
+                    if ((len(full_text) - len(buffer_text)) <= 4096) and (len(full_text + buffer_text) > 4096):
+                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=('-' + buffer_text), 
                             reply_to_message_id=message_id)
+                        buffer_text = ''
                         continue
-                    if len(chunk) > 100:
+                    if len(buffer_text) > 50 or '\n' in buffer_text:
                         reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
-                        try:
-                            await fast_reply.edit_text(text=reply_text, parse_mode='Markdown')
-                        except:
-                            await fast_reply.edit_text(text=reply_text)
-                        time.sleep(1.1)
+                        await self.edit_reply(fast_reply, reply_text)
+                        buffer_text = ''
+                        time.sleep(1.5)
                 reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
                 reply_text += '\n[END]'
-                try:
-                    await fast_reply.edit_text(text=reply_text, parse_mode='Markdown')
-                except:
-                    await fast_reply.edit_text(text=reply_text)
+                await self.edit_reply(fast_reply, reply_text)
                 self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
             else:
                 pass
@@ -196,7 +196,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
-        self.application.add_handler(MessageHandler(filters.TEXT, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.ALL, self.handle_message))
 
     async def job_wrapper(self, context):
         await self.get_jandan_imgs(update=None, context=context)
