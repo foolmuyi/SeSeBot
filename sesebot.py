@@ -171,13 +171,13 @@ class TelegramBot:
                         fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=('-' + full_text[4096:]), 
                             reply_to_message_id=message_id)
                         continue
-                    if len(chunk) > 50 or '\n' in chunk:
+                    if len(chunk) > 100:
                         reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
                         try:
                             await fast_reply.edit_text(text=reply_text, parse_mode='Markdown')
                         except:
                             await fast_reply.edit_text(text=reply_text)
-                        time.sleep(1)
+                        time.sleep(1.1)
                 reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
                 reply_text += '\n[END]'
                 try:
