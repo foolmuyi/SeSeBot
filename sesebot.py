@@ -139,7 +139,8 @@ class TelegramBot:
         if user_id not in self.whitelist:
             return
         keywords = ['色色', '色图', '涩涩', '涩图', '瑟瑟', '瑟图', 'xp', 'p站', 'lsp', 'pixiv']
-        message_text = update.effective_message.text.lower()
+        message_text = update.effective_message.text or update.effective_message.caption
+        message_text = message_text.lower()
         try:
             for keyword in keywords:
                 if keyword in message_text:
@@ -162,7 +163,7 @@ class TelegramBot:
                     self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
                 self.aichat_contexts[chat_id].append({"role": "user", "content": update.effective_message.text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
-                while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 3000):
+                while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 5000):
                     self.aichat_contexts[chat_id] = self.aichat_contexts[chat_id][1:]
                     est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 print('Waiting for LLM response...')
