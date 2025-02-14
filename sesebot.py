@@ -140,10 +140,10 @@ class TelegramBot:
             return
         keywords = ['色色', '色图', '涩涩', '涩图', '瑟瑟', '瑟图', 'xp', 'p站', 'lsp', 'pixiv']
         message_text = update.effective_message.text or update.effective_message.caption
-        message_text = message_text.lower()
+        lower_message_text = message_text.lower()
         try:
             for keyword in keywords:
-                if keyword in message_text:
+                if keyword in lower_message_text:
                     if self.check_working_time():
                         mode = 'daily'
                     else:
@@ -161,7 +161,7 @@ class TelegramBot:
                     reply_to_message_id=message_id)
                 if chat_id not in self.aichat_contexts.keys():
                     self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
-                self.aichat_contexts[chat_id].append({"role": "user", "content": update.effective_message.text})
+                self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 5000):
                     self.aichat_contexts[chat_id] = self.aichat_contexts[chat_id][1:]
