@@ -138,9 +138,12 @@ class TelegramBot:
         user_id = str(update.effective_message.from_user.id)
         if user_id not in self.whitelist:
             return
-        keywords = ['色色', '色图', '涩涩', '涩图', '瑟瑟', '瑟图', 'xp', 'p站', 'lsp', 'pixiv']
         message_text = update.effective_message.text or update.effective_message.caption
-        lower_message_text = message_text.lower()
+        if message_text:
+            lower_message_text = message_text.lower()
+        else:
+            return  # 忽略不含文本的纯媒体消息
+        keywords = ['色色', '色图', '涩涩', '涩图', '瑟瑟', '瑟图', 'xp', 'p站', 'lsp', 'pixiv']
         try:
             for keyword in keywords:
                 if keyword in lower_message_text:
@@ -160,7 +163,8 @@ class TelegramBot:
                 fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=("容我想想..."), 
                     reply_to_message_id=message_id)
                 if chat_id not in self.aichat_contexts.keys():
-                    self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
+                    # self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
+                    self.aichat_contexts[chat_id] = []  # DeepSeek recommands "No system prompt" for R1
                 self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 5000):
@@ -188,7 +192,7 @@ class TelegramBot:
                         buffer_text = ''
                         time.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
                 reply_text = full_text[4096 * message_count:]
-                reply_text += '\n[END]'
+                reply_text += '\n(无语，和你说不下去，典型的碳基生物思维)'
                 await self.edit_reply(fast_reply, reply_text)
                 self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
             else:
