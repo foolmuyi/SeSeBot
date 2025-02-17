@@ -169,23 +169,25 @@ class TelegramBot:
                 print('Waiting for LLM response...')
                 full_text = ''
                 buffer_text = ''
+                message_count = 0
                 for chunk in get_ai_response(self.aichat_contexts[chat_id]):
                     full_text += chunk
                     buffer_text += chunk
-                    if ((len(full_text) - len(buffer_text)) <= 4096) and (len(full_text) > 4096):
-                        await self.edit_reply(fast_reply, full_text[:4096])
+                    if (len(full_text) // 4096) - ((len(full_text) - len(buffer_text)) // 4096) == 1:
+                        message_count = len(full_text) // 4096
+                        await self.edit_reply(fast_reply, full_text[4096 * (message_count - 1):4096 * message_count])
                         time.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
-                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=('-' + full_text[4096:]), 
-                            reply_to_message_id=message_id)
+                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, 
+                            text=('-' + full_text[4096 * message_count:]), reply_to_message_id=message_id)
                         time.sleep(1.5)
                         buffer_text = ''
                         continue
                     if len(buffer_text) > 100:
-                        reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
+                        reply_text = full_text[4096 * message_count:]
                         await self.edit_reply(fast_reply, reply_text)
                         buffer_text = ''
                         time.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
-                reply_text = full_text[4096:] if len(full_text) > 4096 else full_text
+                reply_text = full_text[4096 * message_count:]
                 reply_text += '\n[END]'
                 await self.edit_reply(fast_reply, reply_text)
                 self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
