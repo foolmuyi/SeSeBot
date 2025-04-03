@@ -1,0 +1,6 @@
+requests
+lxml
+pillow
+openai
+python-dotenv
+python-telegram-bot
