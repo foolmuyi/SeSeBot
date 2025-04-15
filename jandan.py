@@ -2,7 +2,7 @@ import requests
 import random
 import traceback
 import json
-import re
+from bs4 import BeautifulSoup
 
 
 base_url = 'https://jandan.net'
@@ -18,8 +18,8 @@ def get_top_comments(filtered):
         comment_id = comment['id']
         if comment_id not in filtered:
             all_comments[comment_id] = {}
-            pattern = r'<img\s+src="([^"]+)"'
-            img_urls = re.findall(pattern, comment['content'])
+            soup = BeautifulSoup(comment['content'], 'html.parser')
+            img_urls = [img['src'] for img in soup.find_all('img') if img.get('src')]
             all_comments[comment_id] = img_urls
     if all_comments:
         random_comment_id = random.choice(list(all_comments.keys()))
@@ -28,7 +28,7 @@ def get_top_comments(filtered):
                           'comment_url': base_url + '/t/' + str(random_comment_id)}
         return random_comment
     else:
-        raise ValueError('No More Images.')
+        raise ValueError('真的一张都没有了！')
 
 def get_comment_img(img_url):
     print('Downloading jandan images...')
@@ -55,7 +55,8 @@ def get_hot_sub_comments(comment_id):
     res = requests.get(url=sub_comments_url, headers=headers, timeout=timeout).text
     hot_sub_comments_list = json.loads(res)['hot_tucao']
     for each in hot_sub_comments_list:
-        hot_sub_comments += re.sub(r'<[^>]+>', '', each['comment_content'])
+        soup = BeautifulSoup(each['comment_content'], 'html.parser')
+        hot_sub_comments += soup.get_text()
         hot_sub_comments += f'    \U00002B55\U00002B55[{each['vote_positive']}]'
         hot_sub_comments += f'    \U0000274C\U0000274C[{each['vote_negative']}]'
         hot_sub_comments += '\n'

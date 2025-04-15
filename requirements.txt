@@ -1,5 +1,6 @@
-requests
-pillow
-openai
-python-dotenv
+requests==2.32.3
+pillow==11.1.0
+openai==1.66.3
+python-dotenv==1.0.1
 python-telegram-bot[job-queue]
+beautifulsoup4==4.13.4
