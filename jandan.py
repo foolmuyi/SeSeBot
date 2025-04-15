@@ -1,7 +1,8 @@
 import requests
 import random
 import traceback
-from lxml import html
+import json
+import re
 
 
 base_url = 'https://jandan.net'
@@ -10,21 +11,21 @@ timeout = (3, 30)
 
 def get_top_comments(filtered):
     all_comments = {}
-    top_url = base_url + '/top'
+    top_url = base_url + '/api/top/post/26402'
     res = requests.get(url=top_url, headers=headers, timeout=timeout).text
-    tree = html.fromstring(res)
-    commentlist = tree.xpath('//*[@id="pic"]/ol/li')
-    for comment in commentlist:
-        comment_id = str(comment.xpath('./div/div/div[2]/span/a/@href')[0]).split('/')[-1]
+    comment_list = json.loads(res)['data']
+    for comment in comment_list:
+        comment_id = comment['id']
         if comment_id not in filtered:
-            imgs = comment.xpath('./div/div/div[2]/p/a/@href')
-            img_urls = ['https:' + str(img_url) for img_url in imgs]
+            all_comments[comment_id] = {}
+            pattern = r'<img\s+src="([^"]+)"'
+            img_urls = re.findall(pattern, comment['content'])
             all_comments[comment_id] = img_urls
     if all_comments:
-        random_comment = {}
-        comment_id, img_urls = random.choice(list(all_comments.items()))
-        random_comment['comment_url'] = base_url + '/t/' + comment_id
-        random_comment['img_urls'] = img_urls
+        random_comment_id = random.choice(list(all_comments.keys()))
+        random_comment = {'comment_id': random_comment_id,
+                          'img_urls': all_comments[random_comment_id],
+                          'comment_url': base_url + '/t/' + str(random_comment_id)}
         return random_comment
     else:
         raise ValueError('No More Images.')
@@ -46,3 +47,16 @@ def get_comment_img(img_url):
             continue
 
     raise ValueError('Failed to download image.')
+
+def get_hot_sub_comments(comment_id):
+    hot_sub_comments = ''
+    print('Getting sub comments...')
+    sub_comments_url = base_url + f'/api/tucao/list/{comment_id}'
+    res = requests.get(url=sub_comments_url, headers=headers, timeout=timeout).text
+    hot_sub_comments_list = json.loads(res)['hot_tucao']
+    for each in hot_sub_comments_list:
+        hot_sub_comments += re.sub(r'<[^>]+>', '', each['comment_content'])
+        hot_sub_comments += f'    \U00002B55\U00002B55[{each['vote_positive']}]'
+        hot_sub_comments += f'    \U0000274C\U0000274C[{each['vote_negative']}]'
+        hot_sub_comments += '\n'
+    return hot_sub_comments

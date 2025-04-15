@@ -80,7 +80,7 @@ class TelegramBot:
             if chat_id not in self.filtered.keys():
                 self.filtered[chat_id] = []
             comment = get_top_comments(self.filtered[chat_id])
-            comment_id = comment['comment_url'].split('/')[-1]
+            comment_id = comment['comment_id']
             self.filtered[chat_id].append(comment_id)
             for img_url in comment['img_urls']:
                 filename = img_url.split('/')[-1]
@@ -92,7 +92,9 @@ class TelegramBot:
                     await self.application.bot.send_photo(chat_id=chat_id, photo=img)
                 else:
                     await self.application.bot.send_document(chat_id=chat_id, document=img, filename=filename)
-            await self.application.bot.send_message(chat_id=chat_id, text=comment['comment_url'])
+            hot_sub_comments = get_hot_sub_comments(comment_id)
+            text2send = hot_sub_comments + '\n' + comment['comment_url']
+            await self.application.bot.send_message(chat_id=chat_id, text=text2send)
         except Exception as e:
             traceback.print_exc()
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
