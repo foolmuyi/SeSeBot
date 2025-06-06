@@ -107,35 +107,35 @@ class TelegramBot:
             await reply_message.edit_text(text=reply_text)
 
     def split_message_with_codeblock(self, message):
-    # 匹配所有三个反引号的位置（考虑转义情况）
-    pattern = r'(?<!\\)(?:\\\\)*```'
-    matches = list(re.finditer(pattern, message))
-    
-    # 状态跟踪
-    in_code_block = False
-    last_open_index = -1  # 记录最后一个未闭合代码块的起始位置
-    
-    # 遍历所有匹配的反引号
-    for match in matches:
-        if not in_code_block:
-            # 遇到代码块开始
-            in_code_block = True
-            last_open_index = match.start()
-        else:
-            # 遇到代码块结束
-            in_code_block = False
-            last_open_index = -1  # 重置未闭合标记
-    
-    # 如果消息以未闭合代码块结束，则进行分割
-    if in_code_block and last_open_index >= 0:
-        # 第一条消息：从头到未闭合代码块开始之前（确保闭合）
-        part1 = message[:last_open_index]
-        # 第二条消息：从未闭合代码块开始到结束
-        part2 = message[last_open_index:]
-        return [part1, part2]
-    
-    # 无需分割
-    return [message]
+        # 匹配所有三个反引号的位置（考虑转义情况）
+        pattern = r'(?<!\\)(?:\\\\)*```'
+        matches = list(re.finditer(pattern, message))
+        
+        # 状态跟踪
+        in_code_block = False
+        last_open_index = -1  # 记录最后一个未闭合代码块的起始位置
+        
+        # 遍历所有匹配的反引号
+        for match in matches:
+            if not in_code_block:
+                # 遇到代码块开始
+                in_code_block = True
+                last_open_index = match.start()
+            else:
+                # 遇到代码块结束
+                in_code_block = False
+                last_open_index = -1  # 重置未闭合标记
+        
+        # 如果消息以未闭合代码块结束，则进行分割
+        if in_code_block and last_open_index >= 0:
+            # 第一条消息：从头到未闭合代码块开始之前（确保闭合）
+            part1 = message[:last_open_index]
+            # 第二条消息：从未闭合代码块开始到结束
+            part2 = message[last_open_index:]
+            return [part1, part2]
+        
+        # 无需分割
+        return [message]
 
     @check_access
     async def start_command(self, update, context):
