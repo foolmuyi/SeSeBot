@@ -215,7 +215,7 @@ class TelegramBot:
                     if len(current_message) > 4096:
                         finished_message = current_message[:4096]
                         current_message = current_message[4096:]
-                        splited_messages = split_message_with_codeblock(finished_message)
+                        splited_messages = self.split_message_with_codeblock(finished_message)
                         if len(splited_messages) == 2:
                             finished_message = splited_messages[0]
                             current_message = splited_messages[1] + current_message
