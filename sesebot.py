@@ -212,7 +212,7 @@ class TelegramBot:
                     full_text += chunk
                     current_message += chunk
                     buffer_text += chunk
-                    if current_message >= 4096:
+                    if len(current_message) > 4096:
                         finished_message = current_message[:4096]
                         current_message = current_message[4096:]
                         splited_messages = split_message_with_codeblock(finished_message)
