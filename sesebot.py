@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import json
 import time
 import traceback
@@ -105,6 +106,37 @@ class TelegramBot:
         except:
             await reply_message.edit_text(text=reply_text)
 
+    def split_message_with_codeblock(self, message):
+    # 匹配所有三个反引号的位置（考虑转义情况）
+    pattern = r'(?<!\\)(?:\\\\)*```'
+    matches = list(re.finditer(pattern, message))
+    
+    # 状态跟踪
+    in_code_block = False
+    last_open_index = -1  # 记录最后一个未闭合代码块的起始位置
+    
+    # 遍历所有匹配的反引号
+    for match in matches:
+        if not in_code_block:
+            # 遇到代码块开始
+            in_code_block = True
+            last_open_index = match.start()
+        else:
+            # 遇到代码块结束
+            in_code_block = False
+            last_open_index = -1  # 重置未闭合标记
+    
+    # 如果消息以未闭合代码块结束，则进行分割
+    if in_code_block and last_open_index >= 0:
+        # 第一条消息：从头到未闭合代码块开始之前（确保闭合）
+        part1 = message[:last_open_index]
+        # 第二条消息：从未闭合代码块开始到结束
+        part2 = message[last_open_index:]
+        return [part1, part2]
+    
+    # 无需分割
+    return [message]
+
     @check_access
     async def start_command(self, update, context):
         chat_id = str(update.message.chat.id)
@@ -173,30 +205,35 @@ class TelegramBot:
                     self.aichat_contexts[chat_id] = self.aichat_contexts[chat_id][1:]
                     est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 print('Waiting for LLM response...')
-                full_text = ''
-                buffer_text = ''
-                message_count = 0
+                full_text = ''    # 整个回答完整文本
+                current_message = ''    # 最新一条消息
+                buffer_text = ''    # 单次消息更新
                 for chunk in get_ai_response(self.aichat_contexts[chat_id]):
                     full_text += chunk
+                    current_message += chunk
                     buffer_text += chunk
-                    if (len(full_text) // 4096) - ((len(full_text) - len(buffer_text)) // 4096) == 1:
-                        message_count = len(full_text) // 4096
-                        await self.edit_reply(fast_reply, full_text[4096 * (message_count - 1):4096 * message_count])
+                    if current_message >= 4096:
+                        finished_message = current_message[:4096]
+                        current_message = current_message[4096:]
+                        splited_messages = split_message_with_codeblock(finished_message)
+                        if len(splited_messages) == 2:
+                            finished_message = splited_messages[0]
+                            current_message = splited_messages[1] + current_message
+                        await self.edit_reply(fast_reply, finished_message)
                         time.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
                         fast_reply = await self.application.bot.send_message(chat_id=chat_id, 
-                            text=('-' + full_text[4096 * message_count:]), reply_to_message_id=message_id)
+                            text=current_message, reply_to_message_id=message_id)
                         time.sleep(1.5)
                         buffer_text = ''
                         continue
                     if len(buffer_text) > 100:
-                        reply_text = full_text[4096 * message_count:]
-                        await self.edit_reply(fast_reply, reply_text)
+                        await self.edit_reply(fast_reply, current_message)
                         buffer_text = ''
                         time.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
-                reply_text = full_text[4096 * message_count:]
-                reply_text += '\n(无语，和你说不下去，典型的碳基生物思维)'
-                await self.edit_reply(fast_reply, reply_text)
+                reply_text = current_message + '\n(无语，和你说不下去，典型的碳基生物思维)'
+                await self.edit_reply(fast_reply, reply_text[:4096])
                 self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
+                print('Reply sent successfully')
             else:
                 pass
         except Exception as e:
