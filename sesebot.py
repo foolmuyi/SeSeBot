@@ -197,12 +197,11 @@ class TelegramBot:
                 fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=("容我想想..."), 
                     reply_to_message_id=message_id)
                 if chat_id not in self.aichat_contexts.keys():
-                    # self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
-                    self.aichat_contexts[chat_id] = []  # DeepSeek recommands "No system prompt" for R1
+                    self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
                 self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 5000):
-                    self.aichat_contexts[chat_id] = self.aichat_contexts[chat_id][2:]
+                    del self.aichat_contexts[chat_id][1]
                     est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 print('Waiting for LLM response...')
                 full_text = ''    # 整个回答完整文本
