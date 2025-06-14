@@ -202,7 +202,7 @@ class TelegramBot:
                 self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 5000):
-                    self.aichat_contexts[chat_id] = self.aichat_contexts[chat_id][1:]
+                    self.aichat_contexts[chat_id] = self.aichat_contexts[chat_id][2:]
                     est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 print('Waiting for LLM response...')
                 full_text = ''    # 整个回答完整文本
@@ -221,8 +221,12 @@ class TelegramBot:
                             current_message = splited_messages[1] + current_message
                         await self.edit_reply(fast_reply, finished_message)
                         time.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
+                        if len(current_message.strip()) > 0:
+                            new_message = current_message
+                        else:
+                            new_message = '-'
                         fast_reply = await self.application.bot.send_message(chat_id=chat_id, 
-                            text=current_message, reply_to_message_id=message_id)
+                            text=new_message, reply_to_message_id=message_id)
                         time.sleep(1.5)
                         buffer_text = ''
                         continue
