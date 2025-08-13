@@ -32,7 +32,7 @@ def get_top_comments(filtered):
 
 def get_comment_img(img_url):
     print('Downloading jandan images...')
-    try_count = 1
+    try_count = 0
     while try_count < 5:
         try:
             print(f'Trying to download {img_url} for {try_count} time')
@@ -51,13 +51,25 @@ def get_comment_img(img_url):
 def get_hot_sub_comments(comment_id):
     hot_sub_comments = ''
     print('Getting sub comments...')
-    sub_comments_url = base_url + f'/api/tucao/list/{comment_id}'
-    res = requests.get(url=sub_comments_url, headers=headers, timeout=timeout).text
-    hot_sub_comments_list = json.loads(res)['hot_tucao']
-    for each in hot_sub_comments_list:
-        soup = BeautifulSoup(each['comment_content'], 'html.parser')
-        hot_sub_comments += soup.get_text()
-        hot_sub_comments += f'    \U00002B55\U00002B55[{each['vote_positive']}]'
-        hot_sub_comments += f'    \U0000274C\U0000274C[{each['vote_negative']}]'
-        hot_sub_comments += '\n'
-    return hot_sub_comments
+    try_count = 0
+    while try_count < 5:
+        try:
+            print(f'Trying to download sub comments for {try_count} time')
+            try_count += 1
+            sub_comments_url = base_url + f'/api/tucao/list/{comment_id}'
+            res = requests.get(url=sub_comments_url, headers=headers, timeout=timeout).text
+            if res.status_code == 200:
+                hot_sub_comments_list = json.loads(res)['hot_tucao']
+                for each in hot_sub_comments_list:
+                    soup = BeautifulSoup(each['comment_content'], 'html.parser')
+                    hot_sub_comments += soup.get_text()
+                    hot_sub_comments += f'    \U00002B55\U00002B55[{each['vote_positive']}]'
+                    hot_sub_comments += f'    \U0000274C\U0000274C[{each['vote_negative']}]'
+                    hot_sub_comments += '\n'
+                return hot_sub_comments
+            else:
+                print(res.status_code, res.reason)
+        except Exception as e:
+            traceback.print_exc()
+            continue
+    raise ValueError('Failed to get comments.')
