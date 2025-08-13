@@ -35,7 +35,7 @@ def get_comment_img(img_url):
     try_count = 0
     while try_count < 5:
         try:
-            print(f'Trying to download {img_url} for {try_count} time')
+            print(f'Trying to download {img_url} for {try_count+1} time')
             try_count += 1
             response = requests.get(url=img_url, headers=headers, timeout=timeout)
             if response.status_code == 200:
@@ -54,12 +54,12 @@ def get_hot_sub_comments(comment_id):
     try_count = 0
     while try_count < 5:
         try:
-            print(f'Trying to download sub comments for {try_count} time')
+            print(f'Trying to download sub comments for {try_count+1} time')
             try_count += 1
             sub_comments_url = base_url + f'/api/tucao/list/{comment_id}'
-            res = requests.get(url=sub_comments_url, headers=headers, timeout=timeout).text
+            res = requests.get(url=sub_comments_url, headers=headers, timeout=timeout)
             if res.status_code == 200:
-                hot_sub_comments_list = json.loads(res)['hot_tucao']
+                hot_sub_comments_list = json.loads(res.text)['hot_tucao']
                 for each in hot_sub_comments_list:
                     soup = BeautifulSoup(each['comment_content'], 'html.parser')
                     hot_sub_comments += soup.get_text()
