@@ -77,11 +77,13 @@ class TelegramBot:
             else:
                 chat_id = str(context.job.chat_id)
                 await self.application.bot.send_message(chat_id=chat_id, text='沙雕图来咯')
+        has_comment = False
         try:
             if chat_id not in self.filtered.keys():
                 self.filtered[chat_id] = []
             comment = get_top_comments(self.filtered[chat_id])
             comment_id = comment['comment_id']
+            has_comment = True
             self.filtered[chat_id].append(comment_id)
             for img_url in comment['img_urls']:
                 filename = img_url.split('/')[-1]
@@ -93,12 +95,20 @@ class TelegramBot:
                     await self.application.bot.send_photo(chat_id=chat_id, photo=img)
                 else:
                     await self.application.bot.send_document(chat_id=chat_id, document=img, filename=filename)
-            hot_sub_comments = get_hot_sub_comments(comment_id)
-            text2send = hot_sub_comments + '\n' + comment['comment_url']
-            await self.application.bot.send_message(chat_id=chat_id, text=text2send)
+        except telegram.error.TimedOut as e:  # Telegram自身Bug：发送成功后仍有可能收到TimeOut异常
+            traceback.print_exc()
         except Exception as e:
             traceback.print_exc()
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
+        finally:
+            if has_comment == True:  # 至少要成功获取到图片链接才能尝试获取评论
+                try:
+                    hot_sub_comments = get_hot_sub_comments(comment_id)
+                    text2send = hot_sub_comments + '\n' + comment['comment_url']
+                    await self.application.bot.send_message(chat_id=chat_id, text=text2send)
+                except Exception as e:
+                    traceback.print_exc()
+                    await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
 
     async def edit_reply(self, reply_message, reply_text):
         try:
@@ -200,7 +210,7 @@ class TelegramBot:
                     self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
                 self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
-                while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 5000):
+                while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 10000):
                     del self.aichat_contexts[chat_id][1]
                     est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 print('Waiting for LLM response...')
