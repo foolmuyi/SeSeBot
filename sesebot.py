@@ -10,6 +10,7 @@ from jandan import *
 from dotenv import load_dotenv
 from PIL import Image
 from telegram import Update
+from telegram.error import TimedOut
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
 
 
@@ -95,7 +96,7 @@ class TelegramBot:
                     await self.application.bot.send_photo(chat_id=chat_id, photo=img)
                 else:
                     await self.application.bot.send_document(chat_id=chat_id, document=img, filename=filename)
-        except telegram.error.TimedOut as e:  # Telegram自身Bug：发送成功后仍有可能收到TimeOut异常
+        except TimedOut:  # Telegram自身Bug：发送成功后仍有可能收到TimeOut异常
             traceback.print_exc()
         except Exception as e:
             traceback.print_exc()
@@ -207,7 +208,7 @@ class TelegramBot:
                 fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=("容我想想..."), 
                     reply_to_message_id=message_id)
                 if chat_id not in self.aichat_contexts.keys():
-                    self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!"}]
+                    self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!注意,可以结合上下文,但只需回答最新的一个问题!"}]
                 self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 10000):
