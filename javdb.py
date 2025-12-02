@@ -79,5 +79,6 @@ def get_javdb_preview(href):
         for image in images:
             href = image['href']
             image_urls.append(href)
+        image_urls.append(image_urls.pop(0))  # 将封面图放到最后作为结束标志
         return image_urls
     raise ValueError("Failed to get javdb preview image urls.")
