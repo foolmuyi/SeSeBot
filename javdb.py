@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import random
 import requests
@@ -36,11 +37,11 @@ def download_javdb_img(url):
 
     raise ValueError('Failed to download javdb image.')
 
-def get_javdb_rankings(filtered):
+def get_javdb_ranking(filtered):
     url = 'https://javdb.com/rankings/movies?p=daily&t=censored'
     res = requests.get(url)
     soup = BeautifulSoup(res.text, 'html.parser')
-    move_container = soup.find('div', class_ = 'movie-list')
+    movie_container = soup.find('div', class_ = 'movie-list')
     if movie_container and isinstance(movie_container, Tag):
         movies = movie_container.find_all('div', class_='item')
         movie_list = []
@@ -49,7 +50,11 @@ def get_javdb_rankings(filtered):
             title = str(movie.find('a')['title'])
             img_src = str(movie.select_one('div.cover img')['src'])
             code = str(movie.select_one('div.video-title strong').text)
-            score = str(movie.find('div', class_='score').find('span', class_='value').text.strip().replace('\xa0', ' '))
+            score_raw = str(movie.find('div', class_='score').find('span', class_='value').text.strip().replace('\xa0', ' '))
+            score_pattern = r'^(\d+(?:\.\d+)?)'
+            score_float = float(re.match(score_pattern, score_raw).group(1))
+            score_stars = round(score_float) * '\U00002B50'
+            score = score_stars + ' ' + score_raw
             if code not in filtered:
                 movie_info = {
                     'href': href,

@@ -7,11 +7,12 @@ import traceback
 from pixiv import *
 from aichat import *
 from jandan import *
+from javdb import *
 from dotenv import load_dotenv
 from PIL import Image
-from telegram import Update
+from telegram import Update, InlineKeyboardButton
 from telegram.error import TimedOut
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, CallbackQueryHandler
 
 
 class TelegramBot:
@@ -125,17 +126,38 @@ class TelegramBot:
             movie_score = msg['score']
             self.filtered[chat_id].append(movie_code)
             movie_info_msg = f"{movie_code}  {movie_title}\n{movie_score}\n{movie_url}"
-            movie_cover = download_jav_img(movie_cover_url)
+            movie_cover = download_javdb_img(movie_cover_url)
             img_width, img_height = Image.open(io.BytesIO(movie_cover)).size
             if ((len(movie_cover) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
                     await self.application.bot.send_photo(chat_id=chat_id, photo=movie_cover)
             else:
                 filename = movie_cover_url.split("/")[-1]
                 await self.application.bot.send_document(chat_id=chat_id, document=movie_cover, filename=filename)
-            await update.effective_message.reply_text(movie_info_msg)
+            keyboard = [
+                [InlineKeyboardButton("换一个", callback_data='next:null'),
+                 InlineKeyboardButton("让我康康", callback_data=f'detail:{msg['href']}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.effective_message.reply_text(movie_info_msg, reply_markup=reply_markup)
         except Exception as e:
             traceback.print_exc()
             await update.effective_message.reply_text('Error:\n' + str(e))
+
+    async def get_javdb_details(self, update, href):
+        try:
+            chat_id = str(update.effective_message.chat.id)
+            image_urls = get_javdb_preview(href)
+            for image_url in image_urls:
+                preview_image = download_javdb_img(image_url)
+                img_width, img_height = Image.open(io.BytesIO(preview_image)).size
+                if ((len(preview_image) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
+                        await self.application.bot.send_photo(chat_id=chat_id, photo=preview_image)
+                else:
+                    filename = image_url.split("/")[-1]
+                    await self.application.bot.send_document(chat_id=chat_id, document=preview_image, filename=filename)
+        except Exception as e:
+            traceback.print_exc()
+            await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
 
     async def edit_reply(self, reply_message, reply_text):
         try:
@@ -204,6 +226,17 @@ class TelegramBot:
         user_id = str(update.effective_message.from_user.id)
         chat_id = str(update.effective_message.chat.id)
         await update.message.reply_text(f"Pong! 你的userid是{user_id}，当前chatid是{chat_id}")
+
+    async def javdb_button(self, update, context):
+        query = update.callback_query
+        await query.answer()
+        data = query.data.split(':')
+        action = data[0]
+        param = data[1]
+        if action == "next":
+            await self.get_javdb_cover(update)
+        elif action == "detail":
+            await self.get_javdb_details(param)
 
     async def handle_message(self, update, context):
         user_id = str(update.effective_message.from_user.id)
@@ -288,6 +321,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
+        self.application.add_handler(CallbackQueryHandler(javdb_button))
         self.application.add_handler(MessageHandler(filters.ALL, self.handle_message))
 
     async def job_wrapper(self, context):
