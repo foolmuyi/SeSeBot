@@ -46,7 +46,7 @@ class TelegramBot:
             return False
 
     async def get_pixiv_imgs(self, update, mode):
-        await update.effective_message.reply_text('我知道你很急，但你先别急...')
+        await update.effective_message.reply_text('我知道你很急，但你先别急！')
         try:
             chat_id = str(update.effective_message.chat.id)
             if chat_id not in self.filtered.keys():
@@ -145,6 +145,7 @@ class TelegramBot:
     async def get_javdb_details(self, update, href):
         try:
             chat_id = str(update.effective_message.chat.id)
+            await self.application.bot.send_message(chat_id=chat_id, text='我知道你很急，但你先别急...')
             image_urls = get_javdb_preview(href)
             for image_url in image_urls:
                 preview_image = download_javdb_img(image_url)
