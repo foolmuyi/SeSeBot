@@ -10,7 +10,7 @@ from jandan import *
 from javdb import *
 from dotenv import load_dotenv
 from PIL import Image
-from telegram import Update, InlineKeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TimedOut
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, CallbackQueryHandler
 
@@ -113,7 +113,6 @@ class TelegramBot:
                     await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
 
     async def get_javdb_cover(self, update):
-        await update.effective_message.reply_text('我知道你很急，但你先别急...')
         try:
             chat_id = str(update.effective_message.chat.id)
             if chat_id not in self.filtered.keys():
@@ -155,6 +154,7 @@ class TelegramBot:
                 else:
                     filename = image_url.split("/")[-1]
                     await self.application.bot.send_document(chat_id=chat_id, document=preview_image, filename=filename)
+                time.sleep(1.5)
         except Exception as e:
             traceback.print_exc()
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
@@ -236,7 +236,7 @@ class TelegramBot:
         if action == "next":
             await self.get_javdb_cover(update)
         elif action == "detail":
-            await self.get_javdb_details(param)
+            await self.get_javdb_details(update, param)
 
     async def handle_message(self, update, context):
         user_id = str(update.effective_message.from_user.id)
@@ -247,8 +247,7 @@ class TelegramBot:
             lower_message_text = message_text.lower()
         else:
             return  # 忽略不含文本的纯媒体消息
-        # keywords = ['色色', '色图', '涩涩', '涩图', '瑟瑟', '瑟图', 'xp', 'p站', 'lsp', 'pixiv']
-        keywords = ['av']
+        keywords = ['色色', '色图', '涩涩', '涩图', '老司机', '女优', 'xp', 'lsp', 'av']
         try:
             for keyword in keywords:
                 if keyword in lower_message_text:
@@ -321,7 +320,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
-        self.application.add_handler(CallbackQueryHandler(javdb_button))
+        self.application.add_handler(CallbackQueryHandler(self.javdb_button))
         self.application.add_handler(MessageHandler(filters.ALL, self.handle_message))
 
     async def job_wrapper(self, context):
