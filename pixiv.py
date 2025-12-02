@@ -15,7 +15,7 @@ headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KH
            'Cookie': str(COOKIE)}
 timeout = (3, 30)
 
-def download_img(url, referer):
+def download_pixiv_img(url, referer):
     print('downloading....')
     headers_download = headers.copy()
     headers_download["referer"] = str(referer)
@@ -38,7 +38,7 @@ def download_img(url, referer):
 
     raise ValueError('Failed to download image.')
 
-def get_ranking(mode, filtered, pages=2):
+def get_pixiv_ranking(mode, filtered, pages=2):
     url = 'https://www.pixiv.net/'
     image_list = []
     for i in range(pages):

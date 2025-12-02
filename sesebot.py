@@ -50,12 +50,12 @@ class TelegramBot:
             chat_id = str(update.effective_message.chat.id)
             if chat_id not in self.filtered.keys():
                 self.filtered[chat_id] = []
-            msg = get_ranking(mode, self.filtered[chat_id], pages=2)
+            msg = get_pixiv_ranking(mode, self.filtered[chat_id], pages=2)
             artworks_url = msg['artworks_url']
             artworks_id = artworks_url.split("/")[-1]
             self.filtered[chat_id].append(artworks_id)
             for img_url in msg['imgs_url']:
-                img = download_img(img_url, artworks_url)
+                img = download_pixiv_img(img_url, artworks_url)
                 img_width, img_height = Image.open(io.BytesIO(img)).size
                 if ((len(img) < 10*1024*1024) and ((img_width + img_height) < 10000) 
                     and (0.05 < img_height/img_width < 20)):
@@ -110,6 +110,32 @@ class TelegramBot:
                 except Exception as e:
                     traceback.print_exc()
                     await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
+
+    async def get_javdb_cover(self, update):
+        await update.effective_message.reply_text('我知道你很急，但你先别急...')
+        try:
+            chat_id = str(update.effective_message.chat.id)
+            if chat_id not in self.filtered.keys():
+                self.filtered[chat_id] = []
+            msg = get_javdb_ranking(self.filtered[chat_id])
+            movie_url = 'https://javdb.com' + msg['href']
+            movie_title = msg['title']
+            movie_cover_url = msg['img_src']
+            movie_code = msg['code']
+            movie_score = msg['score']
+            self.filtered[chat_id].append(movie_code)
+            movie_info_msg = f"{movie_code}  {movie_title}\n{movie_score}\n{movie_url}"
+            movie_cover = download_jav_img(movie_cover_url)
+            img_width, img_height = Image.open(io.BytesIO(movie_cover)).size
+            if ((len(movie_cover) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
+                    await self.application.bot.send_photo(chat_id=chat_id, photo=movie_cover)
+            else:
+                filename = movie_cover_url.split("/")[-1]
+                await self.application.bot.send_document(chat_id=chat_id, document=movie_cover, filename=filename)
+            await update.effective_message.reply_text(movie_info_msg)
+        except Exception as e:
+            traceback.print_exc()
+            await update.effective_message.reply_text('Error:\n' + str(e))
 
     async def edit_reply(self, reply_message, reply_text):
         try:
@@ -188,16 +214,19 @@ class TelegramBot:
             lower_message_text = message_text.lower()
         else:
             return  # 忽略不含文本的纯媒体消息
-        keywords = ['色色', '色图', '涩涩', '涩图', '瑟瑟', '瑟图', 'xp', 'p站', 'lsp', 'pixiv']
+        # keywords = ['色色', '色图', '涩涩', '涩图', '瑟瑟', '瑟图', 'xp', 'p站', 'lsp', 'pixiv']
+        keywords = ['av']
         try:
             for keyword in keywords:
                 if keyword in lower_message_text:
-                    if self.check_working_time():
-                        mode = 'daily'
-                    else:
-                        mode = 'daily_r18'
+                    # if self.check_working_time():
+                    #     mode = 'daily'
+                    # else:
+                    #     mode = 'daily_r18'
 
-                    await self.get_pixiv_imgs(update, mode)
+                    # await self.get_pixiv_imgs(update, mode)
+
+                    await self.get_javdb_cover(update)
                     break
                 else:
                     pass
