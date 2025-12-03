@@ -265,6 +265,9 @@ class TelegramBot:
                     pass
 
             if update.effective_message.reply_to_message and update.effective_message.reply_to_message.from_user.id == context.bot.id:
+                replied_msg = update.effective_message.reply_to_message
+                if replied_msg.photo and not (replied_msg.text or replied_msg.caption):
+                    return  # 纯图片不回复
                 chat_id = str(update.effective_message.chat.id)
                 message_id = update.effective_message.message_id
                 fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=("容我想想..."), 
@@ -322,7 +325,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))
-        self.application.add_handler(MessageHandler(filters.TEXT, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.CAPTION, self.handle_message))
 
     async def job_wrapper(self, context):
         await self.get_jandan_imgs(update=None, context=context)
