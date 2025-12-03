@@ -322,7 +322,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))
-        self.application.add_handler(MessageHandler(filters.ALL, self.handle_message))
+        self.application.add_handler(MessageHandler(filters.TEXT, self.handle_message))
 
     async def job_wrapper(self, context):
         await self.get_jandan_imgs(update=None, context=context)

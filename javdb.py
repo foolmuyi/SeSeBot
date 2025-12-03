@@ -65,8 +65,11 @@ def get_javdb_ranking(filtered):
                 movie_list.append(movie_info)
             else:
                 pass
-    random_movie = random.choice(movie_list)
-    return random_movie
+    if movie_list:
+        random_movie = random.choice(movie_list)
+        return random_movie
+    else:
+        raise ValueError('没有了，歇会儿吧')
 
 def get_javdb_preview(href):
     url = 'https://javdb.com' + href
