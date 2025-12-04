@@ -53,7 +53,7 @@ def get_javdb_ranking(filtered):
             score_raw = str(movie.find('div', class_='score').find('span', class_='value').text.strip().replace('\xa0', ' '))
             score_pattern = r'^(\d+(?:\.\d+)?)'
             score_float = float(re.match(score_pattern, score_raw).group(1))
-            score_stars = round(score_float) * '\U00002B50'
+            score_stars = int(score_float + 0.5) * '\U00002B50'
             score = score_stars + ' ' + score_raw
             if code not in filtered:
                 movie_info = {
