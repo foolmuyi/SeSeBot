@@ -93,8 +93,7 @@ def get_javdb_reviews(href):
     items = soup.select("dt.review-item[id]")
     results = []
     for item in items:
-        star_count = len(item.select('[class="score-stars"] > [class="icon-star"]'))
-        stars = star_count * '❤' + (5 - star_count) * '  '
+        stars = len(item.select('[class="score-stars"] > [class="icon-star"]')) * '❤'
         time_text = item.select_one(".time").get_text(strip=True)
         comment = item.select_one(".content p").get_text(strip=True)
         results.append({

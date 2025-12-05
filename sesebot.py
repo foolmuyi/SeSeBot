@@ -124,7 +124,7 @@ class TelegramBot:
             movie_code = msg['code']
             movie_score = msg['score']
             self.filtered[chat_id].append(movie_code)
-            movie_info_msg = f"{movie_code}  {movie_title}\n{movie_score}\n{movie_url}"
+            movie_info_msg = f"{movie_code}  {movie_title}\n{movie_score}\n{movie_url}\n"
             movie_cover = download_javdb_img(movie_cover_url)
             img_width, img_height = Image.open(io.BytesIO(movie_cover)).size
             if ((len(movie_cover) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
