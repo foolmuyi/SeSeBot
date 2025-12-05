@@ -136,6 +136,8 @@ class TelegramBot:
             if movie_reviews:
                 for each in movie_reviews:
                     movie_info_msg += f'\n{each['stars']}  {each['time']}\n{each['comment']}'
+            if len(movie_info_msg) > 4096:
+                movie_info_msg = movie_info_msg[:4090] + '......'
             keyboard = [
                 [InlineKeyboardButton("换一个", callback_data='next:null'),
                  InlineKeyboardButton("让我康康", callback_data=f'detail:{msg['href']}')]
