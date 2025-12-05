@@ -53,7 +53,7 @@ def get_javdb_ranking(filtered):
             score_raw = str(movie.find('div', class_='score').find('span', class_='value').text.strip().replace('\xa0', ' '))
             score_pattern = r'^(\d+(?:\.\d+)?)'
             score_float = float(re.match(score_pattern, score_raw).group(1))
-            score_stars = int(score_float + 0.5) * '\U00002B50'
+            score_stars = int(score_float + 0.5) * '⭐'
             score = score_stars + ' ' + score_raw
             if code not in filtered:
                 movie_info = {
@@ -85,3 +85,21 @@ def get_javdb_preview(href):
         image_urls.append(image_urls.pop(0))  # 将封面图放到最后作为结束标志
         return image_urls
     raise ValueError("Failed to get javdb preview image urls.")
+
+def get_javdb_reviews(href):
+    url = 'https://javdb.com' + href + '/reviews/lastest'
+    res = requests.get(url)
+    soup = BeautifulSoup(res.text, 'html.parser')
+    items = soup.select("dt.review-item[id]")
+    results = []
+    for item in items:
+        star_count = len(item.select('[class="score-stars"] > [class="icon-star"]'))
+        stars = star_count * '❤' + (5 - star_count) * '  '
+        time_text = item.select_one(".time").get_text(strip=True)
+        comment = item.select_one(".content p").get_text(strip=True)
+        results.append({
+            "stars": stars,
+            "time": time_text,
+            "comment": comment
+        })
+    return results

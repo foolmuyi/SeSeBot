@@ -132,6 +132,10 @@ class TelegramBot:
             else:
                 filename = movie_cover_url.split("/")[-1]
                 await self.application.bot.send_document(chat_id=chat_id, document=movie_cover, filename=filename)
+            movie_reviews = get_javdb_reviews(msg['href'])
+            if movie_reviews:
+                for each in movie_reviews:
+                    movie_info_msg += f'\n{each['stars']}  {each['time']}\n{each['comment']}'
             keyboard = [
                 [InlineKeyboardButton("换一个", callback_data='next:null'),
                  InlineKeyboardButton("让我康康", callback_data=f'detail:{msg['href']}')]

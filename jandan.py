@@ -63,8 +63,8 @@ def get_hot_sub_comments(comment_id):
                 for each in hot_sub_comments_list:
                     soup = BeautifulSoup(each['comment_content'], 'html.parser')
                     hot_sub_comments += soup.get_text()
-                    hot_sub_comments += f'    \U00002B55\U00002B55[{each['vote_positive']}]'
-                    hot_sub_comments += f'    \U0000274C\U0000274C[{each['vote_negative']}]'
+                    hot_sub_comments += f'    ⭕⭕[{each['vote_positive']}]'
+                    hot_sub_comments += f'    ❌❌[{each['vote_negative']}]'
                     hot_sub_comments += '\n'
                 return hot_sub_comments
             else:
