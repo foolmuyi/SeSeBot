@@ -139,8 +139,8 @@ class TelegramBot:
             if len(movie_info_msg) > 4096:
                 movie_info_msg = movie_info_msg[:4090] + '......'
             keyboard = [
-                [InlineKeyboardButton("换一个", callback_data='next:null'),
-                 InlineKeyboardButton("让我康康", callback_data=f'detail:{msg['href']}')]
+                [InlineKeyboardButton("让我康康", callback_data=f'detail:{msg['href']}'), 
+                 InlineKeyboardButton("换一个", callback_data='next:null')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.effective_message.reply_text(movie_info_msg, reply_markup=reply_markup)
