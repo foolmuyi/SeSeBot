@@ -168,7 +168,11 @@ class TelegramBot:
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
 
     async def get_alpha_news(self, context):
-        news_msg = check_alpha()
+        try:
+            news_msg = check_alpha()
+        except Exception as e:
+            traceback.print_exc()
+            return
         if news_msg:
             chat_id = str(context.job.chat_id)
             await self.application.bot.send_message(chat_id=chat_id, text=news_msg)

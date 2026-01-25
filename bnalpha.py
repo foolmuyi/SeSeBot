@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 
 def check_alpha():
+    print('Checking alpha news...')
     url = 'https://api.foresightnews.pro/v1/event/250?page=1&size=20&sort_by=desc'
     res = requests.get(url=url)
     encoded_data = json.loads(res.text)['data']
@@ -27,4 +28,5 @@ def check_alpha():
     if news_msg:
         return news_msg
     else:
+        print('No more news...')
         return None
