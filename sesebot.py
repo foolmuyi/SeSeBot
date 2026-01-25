@@ -8,6 +8,7 @@ from pixiv import *
 from aichat import *
 from jandan import *
 from javdb import *
+from bnalpha import *
 from dotenv import load_dotenv
 from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -165,6 +166,14 @@ class TelegramBot:
         except Exception as e:
             traceback.print_exc()
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
+
+    async def get_alpha_news(self, context):
+        news_msg = check_alpha()
+        if news_msg:
+            chat_id = str(context.job.chat_id)
+            await self.application.bot.send_message(chat_id=chat_id, text=news_msg)
+        else:
+            pass
 
     async def edit_reply(self, reply_message, reply_text):
         try:
@@ -339,6 +348,7 @@ class TelegramBot:
     def set_scheduler(self):
         GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
         self.application.job_queue.run_repeating(self.job_wrapper, interval=3693, chat_id=GROUP_CHAT_ID, name='scheduled jandan')
+        self.application.job_queue.run_repeating(self.get_alpha_news, interval=600, chat_id=GROUP_CHAT_ID, name='scheduled news')
 
     def run(self):
         self.add_handlers()
