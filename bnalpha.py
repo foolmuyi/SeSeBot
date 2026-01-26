@@ -1,30 +1,31 @@
-import requests
-import base64
-import zlib
-import json
 import time
+import requests
+from xml.etree import ElementTree as ET
+from email.utils import parsedate_to_datetime
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from bs4 import BeautifulSoup
 
 
 def check_alpha():
     print('Checking alpha news...')
-    url = 'https://api.foresightnews.pro/v1/event/250?page=1&size=20&sort_by=desc'
-    res = requests.get(url=url)
-    encoded_data = json.loads(res.text)['data']
-    compressed_data = base64.b64decode(encoded_data)
-    original_text = zlib.decompress(compressed_data).decode('utf-8')
-    original_data = json.loads(original_text)
-    all_news = original_data['items']
+    url = "https://www.techflowpost.com/api/client/common/rss.xml"
+    response = requests.get(url)
+    xml_data = response.content
+
+    root = ET.fromstring(xml_data)
     news_msg = ''
-    for each_news in all_news:
-        news_ts = each_news['published_at']
-        if (time.time() - news_ts) < (11 * 60):
-            news_time = datetime.fromtimestamp(news_ts, tz=ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
-            news = each_news['news']
-            news_title = news['title']
-            new_content = news['content']
-            news_msg += f"{news_time}\n{news_title}\n{new_content}\n"
+    for item in root.findall(".//item"):
+        pub_date = item.find('pubDate').text
+        pub_ts = parsedate_to_datetime(pub_date).timestamp()
+        title = item.find("title").text
+        if ("alpha" in title.lower()) and (time.time() - pub_ts) < (10 * 60):
+            if ("binance" in title.lower()) or ("币安" in title):
+                local_pub_date = datetime.fromtimestamp(pub_ts, tz=ZoneInfo("Asia/Shanghai"))
+                news = item.find('description').text
+                news_text = BeautifulSoup(news, 'html.parser').get_text()
+                link = item.find("link").text
+                news_msg += f"{local_pub_date}\n{title}\n{news_text}\n原文链接：{link}\n"
     if news_msg:
         return news_msg
     else:
