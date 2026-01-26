@@ -19,13 +19,14 @@ def check_alpha():
         pub_date = item.find('pubDate').text
         pub_ts = parsedate_to_datetime(pub_date).timestamp()
         title = item.find("title").text
-        if ("alpha" in title.lower()) and (time.time() - pub_ts) < (10 * 60):
-            if ("binance" in title.lower()) or ("币安" in title):
-                local_pub_date = datetime.fromtimestamp(pub_ts, tz=ZoneInfo("Asia/Shanghai"))
-                news = item.find('description').text
-                news_text = BeautifulSoup(news, 'html.parser').get_text()
-                link = item.find("link").text
-                news_msg += f"{local_pub_date}\n{title}\n{news_text}\n原文链接：{link}\n"
+        if (time.time() - pub_ts) < (10 * 60):
+            if ("alpha" in title.lower()) or ("pre-tge" in title.lower()):
+                if ("binance" in title.lower()) or ("币安" in title):
+                    local_pub_date = datetime.fromtimestamp(pub_ts, tz=ZoneInfo("Asia/Shanghai"))
+                    news = item.find('description').text
+                    news_text = BeautifulSoup(news, 'html.parser').get_text()
+                    link = item.find("link").text
+                    news_msg += f"{local_pub_date}\n{title}\n{news_text}\n原文链接：{link}\n"
     if news_msg:
         return news_msg
     else:
