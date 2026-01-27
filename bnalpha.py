@@ -20,7 +20,7 @@ def check_alpha():
         pub_ts = parsedate_to_datetime(pub_date).timestamp()
         title = item.find("title").text
         if (time.time() - pub_ts) < (10 * 60):
-            if ("alpha" in title.lower()) or ("pre-tge" in title.lower()):
+            if ("alpha" in title.lower()) or ("tge" in title.lower()):
                 if ("binance" in title.lower()) or ("币安" in title):
                     local_pub_date = datetime.fromtimestamp(pub_ts, tz=ZoneInfo("Asia/Shanghai"))
                     news = item.find('description').text
