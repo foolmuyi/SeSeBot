@@ -292,8 +292,7 @@ class TelegramBot:
                 fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=("容我想想..."), 
                     reply_to_message_id=message_id)
                 if chat_id not in self.aichat_contexts.keys():
-                    self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!注意,可以结合上下文,但只需回答最新的一个问题!"}]
-                    self.aichat_contexts[chat_id] = [{"role": "assistant", "content": replied_msg.text}]
+                    self.aichat_contexts[chat_id] = [{"role": "system", "content": "注意，可以结合上下文，但只需回答最新的一个问题，请使用中文。"}]
                 self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 10000):
