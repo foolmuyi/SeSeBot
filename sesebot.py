@@ -293,6 +293,7 @@ class TelegramBot:
                     reply_to_message_id=message_id)
                 if chat_id not in self.aichat_contexts.keys():
                     self.aichat_contexts[chat_id] = [{"role": "system", "content": "让我们说中文!注意,可以结合上下文,但只需回答最新的一个问题!"}]
+                    self.aichat_contexts[chat_id] = [{"role": "assistant", "content": replied_msg.text}]
                 self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
                 est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
                 while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 10000):
@@ -352,7 +353,7 @@ class TelegramBot:
     def set_scheduler(self):
         GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
         self.application.job_queue.run_repeating(self.job_wrapper, interval=3693, chat_id=GROUP_CHAT_ID, name='scheduled jandan')
-        self.application.job_queue.run_repeating(self.get_alpha_news, interval=600, chat_id=GROUP_CHAT_ID, name='scheduled news')
+        self.application.job_queue.run_repeating(self.get_alpha_news, interval=300, chat_id=GROUP_CHAT_ID, name='scheduled news')
 
     def run(self):
         self.add_handlers()
