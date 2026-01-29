@@ -169,15 +169,18 @@ class TelegramBot:
 
     async def get_alpha_news(self, context):
         try:
-            news_msg = check_alpha()
+            if "last_news_ts" not in context.bot_data:
+                context.bot_data['last_news_ts'] = time.time()
+            alpha_news = check_alpha(context.bot_data['last_news_ts'])
+            context.bot_data['last_news_ts'] = alpha_news['ts']
         except Exception as e:
             traceback.print_exc()
             return
-        if news_msg:
+        if alpha_news['msg']:
             chat_id = str(context.job.chat_id)
-            await self.application.bot.send_message(chat_id=chat_id, text=news_msg)
+            await self.application.bot.send_message(chat_id=chat_id, text=alpha_news['msg'])
         else:
-            pass
+            print("No alpha news found.")
 
     async def edit_reply(self, reply_message, reply_text):
         try:
