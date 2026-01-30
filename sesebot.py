@@ -231,11 +231,19 @@ class TelegramBot:
 
     @check_access
     async def pixiv_command(self, update, context):
-            try:
-                await self.get_pixiv_imgs(update, 'daily_r18')
-            except Exception as e:
-                traceback.print_exc()
-                await update.effective_message.reply_text('Error:\n' + str(e))
+        try:
+            await self.get_pixiv_imgs(update, 'daily_r18')
+        except Exception as e:
+            traceback.print_exc()
+            await update.effective_message.reply_text('Error:\n' + str(e))
+
+    @check_access
+    async def javdb_command(self, update, context):
+        try:
+            await self.get_javdb_cover(update)
+        except Exception as e:
+            traceback.print_exc()
+            await update.effective_message.reply_text('Error:\n' + str(e))
 
     @check_access
     async def jandan_command(self, update, context):
@@ -270,22 +278,7 @@ class TelegramBot:
             lower_message_text = message_text.lower()
         else:
             return  # 忽略不含文本的纯媒体消息
-        keywords = ['色色', '色图', '涩涩', '涩图', '老司机', '女优', 'xp', 'lsp', 'av']
         try:
-            for keyword in keywords:
-                if keyword in lower_message_text:
-                    # if self.check_working_time():
-                    #     mode = 'daily'
-                    # else:
-                    #     mode = 'daily_r18'
-
-                    # await self.get_pixiv_imgs(update, mode)
-
-                    await self.get_javdb_cover(update)
-                    break
-                else:
-                    pass
-
             if update.effective_message.reply_to_message and update.effective_message.reply_to_message.from_user.id == context.bot.id:
                 replied_msg = update.effective_message.reply_to_message
                 if replied_msg.photo and not (replied_msg.text or replied_msg.caption):
@@ -344,6 +337,7 @@ class TelegramBot:
     def add_handlers(self):
         self.application.add_handler(CommandHandler('start', self.start_command))
         self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
+        self.application.add_handler(CommandHandler('javdb', self.javdb_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))
