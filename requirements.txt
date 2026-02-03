@@ -4,3 +4,4 @@ openai==1.66.3
 python-dotenv==1.0.1
 python-telegram-bot[job-queue]
 beautifulsoup4==4.13.4
+curl_cffi==0.14.0
