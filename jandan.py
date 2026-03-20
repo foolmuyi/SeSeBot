@@ -1,8 +1,7 @@
 import requests
 import random
-import traceback
-import json
 from bs4 import BeautifulSoup
+from http_utils import fetch_json, fetch_response
 
 
 base_url = 'https://jandan.net'
@@ -12,8 +11,17 @@ timeout = (3, 30)
 def get_top_comments(filtered):
     all_comments = {}
     top_url = base_url + '/api/top/post/26402'
-    res = requests.get(url=top_url, headers=headers, timeout=timeout).text
-    comment_list = json.loads(res)['data']
+    top_data = fetch_json(
+        requests.get,
+        url=top_url,
+        headers=headers,
+        timeout=timeout,
+        attempts=4,
+        error_message='Failed to fetch Jandan top comments',
+    )
+    comment_list = top_data.get('data')
+    if not isinstance(comment_list, list):
+        raise ValueError('Failed to fetch Jandan top comments: missing data')
     for comment in comment_list:
         comment_id = comment['id']
         if comment_id not in filtered:
@@ -32,44 +40,35 @@ def get_top_comments(filtered):
 
 def get_comment_img(img_url):
     print('Downloading jandan images...')
-    try_count = 0
-    while try_count < 5:
-        try:
-            print(f'Trying to download {img_url} for {try_count+1} time')
-            try_count += 1
-            response = requests.get(url=img_url, headers=headers, timeout=timeout)
-            if response.status_code == 200:
-                return response.content
-            else:
-                print(response.status_code, response.reason)
-        except Exception as e:
-            traceback.print_exc()
-            continue
-
-    raise ValueError('Failed to download image.')
+    response = fetch_response(
+        requests.get,
+        url=img_url,
+        headers=headers,
+        timeout=timeout,
+        attempts=4,
+        error_message='Failed to download image',
+    )
+    return response.content
 
 def get_hot_sub_comments(comment_id):
     hot_sub_comments = ''
     print('Getting sub comments...')
-    try_count = 0
-    while try_count < 5:
-        try:
-            print(f'Trying to download sub comments for {try_count+1} time')
-            try_count += 1
-            sub_comments_url = base_url + f'/api/tucao/list/{comment_id}'
-            res = requests.get(url=sub_comments_url, headers=headers, timeout=timeout)
-            if res.status_code == 200:
-                hot_sub_comments_list = json.loads(res.text)['hot_tucao']
-                for each in hot_sub_comments_list:
-                    soup = BeautifulSoup(each['comment_content'], 'html.parser')
-                    hot_sub_comments += soup.get_text()
-                    hot_sub_comments += f'    ⭕⭕[{each['vote_positive']}]'
-                    hot_sub_comments += f'    ❌❌[{each['vote_negative']}]'
-                    hot_sub_comments += '\n'
-                return hot_sub_comments
-            else:
-                print(res.status_code, res.reason)
-        except Exception as e:
-            traceback.print_exc()
-            continue
-    raise ValueError('Failed to get comments.')
+    sub_comments_url = base_url + f'/api/tucao/list/{comment_id}'
+    sub_comments_data = fetch_json(
+        requests.get,
+        url=sub_comments_url,
+        headers=headers,
+        timeout=timeout,
+        attempts=4,
+        error_message='Failed to get comments',
+    )
+    hot_sub_comments_list = sub_comments_data.get('hot_tucao')
+    if not isinstance(hot_sub_comments_list, list):
+        raise ValueError('Failed to get comments: missing hot_tucao')
+    for each in hot_sub_comments_list:
+        soup = BeautifulSoup(each['comment_content'], 'html.parser')
+        hot_sub_comments += soup.get_text()
+        hot_sub_comments += f'    ⭕⭕[{each["vote_positive"]}]'
+        hot_sub_comments += f'    ❌❌[{each["vote_negative"]}]'
+        hot_sub_comments += '\n'
+    return hot_sub_comments

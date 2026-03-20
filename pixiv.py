@@ -2,8 +2,8 @@ import os
 import time
 import random
 import requests
-import traceback
 from dotenv import load_dotenv
+from http_utils import fetch_json, fetch_response
 
 
 load_dotenv()
@@ -21,30 +21,32 @@ def download_pixiv_img(url, referer):
     headers_download["referer"] = str(referer)
     headers_download["CF-Auth-Key"] = CF_AUTH_KEY
     name = url.split("/")[-1]
-
-    try_count = 1
-    while try_count < 5:
-        try:
-            print(f'Trying to download {name} for {try_count} time')
-            try_count += 1
-            response = requests.get(url=url, headers=headers_download, timeout=timeout)
-            if response.status_code == 200:
-                return response.content
-            else:
-                print(response.status_code, response.reason)
-        except Exception as e:
-            traceback.print_exc()
-            continue
-
-    raise ValueError('Failed to download image.')
+    response = fetch_response(
+        requests.get,
+        url=url,
+        headers=headers_download,
+        timeout=timeout,
+        attempts=4,
+        error_message=f'Failed to download image {name}',
+    )
+    return response.content
 
 def get_pixiv_ranking(mode, filtered, pages=2):
     url = 'https://www.pixiv.net/'
     image_list = []
     for i in range(pages):
         url = url + f"ranking.php?mode={mode}&p={i+1}&format=json"
-        res = requests.get(url, headers=headers, timeout=timeout)
-        datas = res.json()["contents"]
+        ranking_data = fetch_json(
+            requests.get,
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            attempts=4,
+            error_message='Failed to fetch Pixiv ranking',
+        )
+        datas = ranking_data.get("contents")
+        if not isinstance(datas, list):
+            raise ValueError('Failed to fetch Pixiv ranking: missing contents')
         for data in datas:
             if str(data["illust_id"]) not in filtered:
                 image = {
@@ -63,7 +65,17 @@ def get_pixiv_ranking(mode, filtered, pages=2):
     msg['artworks_url'] = artworks['referer']
     msg['imgs_url'] = []
     artworks_url = f"https://www.pixiv.net/ajax/illust/{artworks['p_id']}/pages?lang=zh"
-    artworks_data = requests.get(artworks_url, headers=headers, timeout=timeout).json()["body"]
+    artworks_res = fetch_json(
+        requests.get,
+        url=artworks_url,
+        headers=headers,
+        timeout=timeout,
+        attempts=4,
+        error_message='Failed to fetch Pixiv artwork pages',
+    )
+    artworks_data = artworks_res.get("body")
+    if not isinstance(artworks_data, list):
+        raise ValueError('Failed to fetch Pixiv artwork pages: missing body')
     for artwork in artworks_data:
         img_url = artwork['urls']['original']
         img_url_proxied = img_url.replace("i.pximg.net", CF_WORKER_URL, 1)  # 将原url替换为代理url

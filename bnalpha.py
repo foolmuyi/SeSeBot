@@ -5,13 +5,22 @@ import base64
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from http_utils import fetch_json
 
 
 def check_alpha(start_ts):
     print('Checking alpha news...')
     url = "https://api.foresightnews.pro/v2/feed?page=1&size=30"
-    response = requests.get(url=url)
-    encoded_data = json.loads(response.text)['data']
+    response_data = fetch_json(
+        requests.get,
+        url=url,
+        attempts=4,
+        timeout=(3, 30),
+        error_message='Failed to fetch alpha news',
+    )
+    encoded_data = response_data.get('data')
+    if not encoded_data:
+        raise ValueError('Failed to fetch alpha news: missing data')
     compressed_data = base64.b64decode(encoded_data)
     original_text = zlib.decompress(compressed_data).decode('utf-8')
     original_data = json.loads(original_text)

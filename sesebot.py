@@ -1,3 +1,4 @@
+import asyncio
 import os
 import io
 import re
@@ -52,12 +53,12 @@ class TelegramBot:
             chat_id = str(update.effective_message.chat.id)
             if chat_id not in self.filtered.keys():
                 self.filtered[chat_id] = []
-            msg = get_pixiv_ranking(mode, self.filtered[chat_id], pages=2)
+            msg = await asyncio.to_thread(get_pixiv_ranking, mode, self.filtered[chat_id], 2)
             artworks_url = msg['artworks_url']
             artworks_id = artworks_url.split("/")[-1]
             self.filtered[chat_id].append(artworks_id)
             for img_url in msg['imgs_url']:
-                img = download_pixiv_img(img_url, artworks_url)
+                img = await asyncio.to_thread(download_pixiv_img, img_url, artworks_url)
                 img_width, img_height = Image.open(io.BytesIO(img)).size
                 if ((len(img) < 10*1024*1024) and ((img_width + img_height) < 10000) 
                     and (0.05 < img_height/img_width < 20)):
@@ -84,13 +85,13 @@ class TelegramBot:
         try:
             if chat_id not in self.filtered.keys():
                 self.filtered[chat_id] = []
-            comment = get_top_comments(self.filtered[chat_id])
+            comment = await asyncio.to_thread(get_top_comments, self.filtered[chat_id])
             comment_id = comment['comment_id']
             has_comment = True
             self.filtered[chat_id].append(comment_id)
             for img_url in comment['img_urls']:
                 filename = img_url.split('/')[-1]
-                img = get_comment_img(img_url)
+                img = await asyncio.to_thread(get_comment_img, img_url)
                 img_width, img_height = Image.open(io.BytesIO(img)).size
                 if img_url.split('.')[-1] == 'gif':
                     await self.application.bot.send_animation(chat_id=chat_id, animation=img, filename=filename)
@@ -106,7 +107,7 @@ class TelegramBot:
         finally:
             if has_comment == True:  # 至少要成功获取到图片链接才能尝试获取评论
                 try:
-                    hot_sub_comments = get_hot_sub_comments(comment_id)
+                    hot_sub_comments = await asyncio.to_thread(get_hot_sub_comments, comment_id)
                     text2send = hot_sub_comments + '\n' + comment['comment_url']
                     await self.application.bot.send_message(chat_id=chat_id, text=text2send)
                 except Exception as e:
@@ -118,7 +119,7 @@ class TelegramBot:
             chat_id = str(update.effective_message.chat.id)
             if chat_id not in self.filtered.keys():
                 self.filtered[chat_id] = []
-            msg = get_javdb_ranking(self.filtered[chat_id])
+            msg = await asyncio.to_thread(get_javdb_ranking, self.filtered[chat_id])
             movie_url = 'https://javdb.com' + msg['href']
             movie_title = msg['title']
             movie_cover_url = msg['img_src']
@@ -126,14 +127,14 @@ class TelegramBot:
             movie_score = msg['score']
             self.filtered[chat_id].append(movie_code)
             movie_info_msg = f"{movie_code}  {movie_title}\n{movie_score}\n{movie_url}\n"
-            movie_cover = download_javdb_img(movie_cover_url)
+            movie_cover = await asyncio.to_thread(download_javdb_img, movie_cover_url)
             img_width, img_height = Image.open(io.BytesIO(movie_cover)).size
             if ((len(movie_cover) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
                     await self.application.bot.send_photo(chat_id=chat_id, photo=movie_cover)
             else:
                 filename = movie_cover_url.split("/")[-1]
                 await self.application.bot.send_document(chat_id=chat_id, document=movie_cover, filename=filename)
-            movie_reviews = get_javdb_reviews(msg['href'])
+            movie_reviews = await asyncio.to_thread(get_javdb_reviews, msg['href'])
             if movie_reviews:
                 for each in movie_reviews:
                     movie_info_msg += f'\n{each['stars']}  {each['time']}\n{each['comment']}'
@@ -153,16 +154,16 @@ class TelegramBot:
         try:
             chat_id = str(update.effective_message.chat.id)
             await self.application.bot.send_message(chat_id=chat_id, text='我知道你很急，但你先别急...')
-            image_urls = get_javdb_preview(href)
+            image_urls = await asyncio.to_thread(get_javdb_preview, href)
             for image_url in image_urls:
-                preview_image = download_javdb_img(image_url)
+                preview_image = await asyncio.to_thread(download_javdb_img, image_url)
                 img_width, img_height = Image.open(io.BytesIO(preview_image)).size
                 if ((len(preview_image) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
                         await self.application.bot.send_photo(chat_id=chat_id, photo=preview_image)
                 else:
                     filename = image_url.split("/")[-1]
                     await self.application.bot.send_document(chat_id=chat_id, document=preview_image, filename=filename)
-                time.sleep(1.5)
+                await asyncio.sleep(1.5)
         except Exception as e:
             traceback.print_exc()
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
@@ -171,7 +172,7 @@ class TelegramBot:
         try:
             if "last_news_ts" not in context.bot_data:
                 context.bot_data['last_news_ts'] = time.time()
-            alpha_news = check_alpha(context.bot_data['last_news_ts'])
+            alpha_news = await asyncio.to_thread(check_alpha, context.bot_data['last_news_ts'])
             context.bot_data['last_news_ts'] = alpha_news['ts']
         except Exception as e:
             traceback.print_exc()
@@ -298,7 +299,7 @@ class TelegramBot:
                 full_text = ''    # 整个回答完整文本
                 current_message = ''    # 最新一条消息
                 buffer_text = ''    # 单次消息更新
-                for chunk in get_ai_response(self.aichat_contexts[chat_id]):
+                async for chunk in stream_ai_response(self.aichat_contexts[chat_id]):
                     full_text += chunk
                     current_message += chunk
                     buffer_text += chunk
@@ -310,20 +311,20 @@ class TelegramBot:
                             finished_message = splited_messages[0]
                             current_message = splited_messages[1] + current_message
                         await self.edit_reply(fast_reply, finished_message)
-                        time.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
+                        await asyncio.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
                         if len(current_message.strip()) > 0:
                             new_message = current_message
                         else:
                             new_message = '-'
                         fast_reply = await self.application.bot.send_message(chat_id=chat_id, 
                             text=new_message, reply_to_message_id=message_id)
-                        time.sleep(1.5)
+                        await asyncio.sleep(1.5)
                         buffer_text = ''
                         continue
                     if len(buffer_text) > 100:
                         await self.edit_reply(fast_reply, current_message)
                         buffer_text = ''
-                        time.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
+                        await asyncio.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
                 reply_text = current_message + '\n(无语，和你说不下去，典型的碳基生物思维)'
                 await self.edit_reply(fast_reply, reply_text[:4096])
                 self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})

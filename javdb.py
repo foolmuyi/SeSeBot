@@ -1,10 +1,10 @@
 import os
 import re
 import random
-import traceback
 from curl_cffi import requests
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup, Tag
+from http_utils import fetch_response
 
 
 load_dotenv()
@@ -12,26 +12,26 @@ load_dotenv()
 def download_javdb_img(url):
     print('javdb image downloading....')
     name = url.split("/")[-1]
-
-    try_count = 1
-    while try_count < 5:
-        try:
-            print(f'Trying to download {name} for the {try_count}(th) time')
-            try_count += 1
-            response = requests.get(url=url, impersonate="chrome")
-            if response.status_code == 200:
-                return response.content
-            else:
-                print(response.status_code, response.reason)
-        except Exception as e:
-            traceback.print_exc()
-            continue
-
-    raise ValueError('Failed to download javdb image.')
+    response = fetch_response(
+        requests.get,
+        url=url,
+        attempts=4,
+        timeout=(3, 30),
+        error_message=f'Failed to download javdb image {name}',
+        impersonate="chrome",
+    )
+    return response.content
 
 def get_javdb_ranking(filtered):
     url = 'https://javdb.com/rankings/movies?p=daily&t=censored'
-    res = requests.get(url, impersonate="chrome")
+    res = fetch_response(
+        requests.get,
+        url=url,
+        attempts=4,
+        timeout=(3, 30),
+        error_message='Failed to fetch JavDB ranking',
+        impersonate="chrome",
+    )
     soup = BeautifulSoup(res.text, 'html.parser')
     movie_container = soup.find('div', class_ = 'movie-list')
     if movie_container and isinstance(movie_container, Tag):
@@ -67,7 +67,14 @@ def get_javdb_ranking(filtered):
 
 def get_javdb_preview(href):
     url = 'https://javdb.com' + href
-    res = requests.get(url, impersonate="chrome")
+    res = fetch_response(
+        requests.get,
+        url=url,
+        attempts=4,
+        timeout=(3, 30),
+        error_message='Failed to fetch JavDB preview',
+        impersonate="chrome",
+    )
     soup = BeautifulSoup(res.text, 'html.parser')
     preview_container = soup.find('div', class_ = 'tile-images')
     if preview_container and isinstance(preview_container, Tag):
@@ -82,7 +89,14 @@ def get_javdb_preview(href):
 
 def get_javdb_reviews(href):
     url = 'https://javdb.com' + href + '/reviews/lastest'
-    res = requests.get(url, impersonate="chrome")
+    res = fetch_response(
+        requests.get,
+        url=url,
+        attempts=4,
+        timeout=(3, 30),
+        error_message='Failed to fetch JavDB reviews',
+        impersonate="chrome",
+    )
     soup = BeautifulSoup(res.text, 'html.parser')
     items = soup.select("dt.review-item[id]")
     results = []
