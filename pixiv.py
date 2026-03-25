@@ -25,7 +25,7 @@ def download_pixiv_img(url, referer):
     require_pixiv_proxy_config()
     headers_download = headers.copy()
     headers_download["referer"] = str(referer)
-    headers_download["CF-Auth-Key"] = CF_PIXIV_KEY
+    headers_download["CF-Pixiv-Key"] = CF_PIXIV_KEY
     name = url.split("/")[-1]
     response = fetch_response(
         requests.get,
