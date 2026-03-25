@@ -8,18 +8,24 @@ from http_utils import fetch_json, fetch_response
 
 load_dotenv()
 COOKIE = os.getenv('PIXIV_COOKIE')
-CF_WORKER_URL = os.getenv('CF_WORKER_URL')
-CF_AUTH_KEY = os.getenv('CF_AUTH_KEY')
+CF_PIXIV_URL = os.getenv('CF_PIXIV_URL')
+CF_PIXIV_KEY = os.getenv('CF_PIXIV_KEY')
 
 headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
            'Cookie': str(COOKIE)}
 timeout = (3, 30)
 
+
+def require_pixiv_proxy_config():
+    if not CF_PIXIV_URL or not CF_PIXIV_KEY:
+        raise ValueError('Missing CF_PIXIV_URL or CF_PIXIV_KEY')
+
 def download_pixiv_img(url, referer):
     print('downloading....')
+    require_pixiv_proxy_config()
     headers_download = headers.copy()
     headers_download["referer"] = str(referer)
-    headers_download["CF-Auth-Key"] = CF_AUTH_KEY
+    headers_download["CF-Auth-Key"] = CF_PIXIV_KEY
     name = url.split("/")[-1]
     response = fetch_response(
         requests.get,
@@ -32,6 +38,7 @@ def download_pixiv_img(url, referer):
     return response.content
 
 def get_pixiv_ranking(mode, filtered, pages=2):
+    require_pixiv_proxy_config()
     url = 'https://www.pixiv.net/'
     image_list = []
     for i in range(pages):
@@ -78,6 +85,6 @@ def get_pixiv_ranking(mode, filtered, pages=2):
         raise ValueError('Failed to fetch Pixiv artwork pages: missing body')
     for artwork in artworks_data:
         img_url = artwork['urls']['original']
-        img_url_proxied = img_url.replace("i.pximg.net", CF_WORKER_URL, 1)  # 将原url替换为代理url
+        img_url_proxied = img_url.replace("i.pximg.net", CF_PIXIV_URL, 1)  # 将原url替换为代理url
         msg['imgs_url'].append(img_url_proxied)
     return msg

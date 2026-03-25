@@ -18,8 +18,10 @@ pip3 install -r requirements.txt
   -  `BOT_TOKEN`: your Telegram bot token
   -  `GROUP_CHAT_ID`: the `chat_id` of your Telegram group
   -  `PIXIV_COOKIE`: your Pixiv cookie
-  -  `CF_WORKER_URL`: your Cloudflare worker url
-  -  `CF_AUTH_KEY`: your Cloudflare worker authentication key
+  -  `CF_PIXIV_URL`: your Pixiv Cloudflare worker url
+  -  `CF_PIXIV_KEY`: your Pixiv Cloudflare worker authentication key
+  -  `CF_BNALPHA_URL`: your bnalpha Cloudflare worker url
+  -  `CF_BNALPHA_KEY`: your bnalpha Cloudflare worker authentication key
   -  LLM API key from Grok, OpenAI or any other provider
 - Create `whitelist.json` and fill it with the Telegram `chat_id` of yourself and your friends.
 

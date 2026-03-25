@@ -1,3 +1,4 @@
+import os
 import zlib
 import json
 import time
@@ -5,17 +6,39 @@ import base64
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from urllib.parse import urlencode
+from dotenv import load_dotenv
 from http_utils import fetch_json
+
+load_dotenv()
+
+CF_BNALPHA_URL = os.getenv('CF_BNALPHA_URL')
+CF_BNALPHA_KEY = os.getenv('CF_BNALPHA_KEY')
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Referer': 'https://foresightnews.pro/',
+}
+TIMEOUT = (3, 30)
+
+
+def build_bnalpha_proxy_url(url):
+    if not CF_BNALPHA_URL or not CF_BNALPHA_KEY:
+        raise ValueError('Missing CF_BNALPHA_URL or CF_BNALPHA_KEY')
+    return f"{CF_BNALPHA_URL}?{urlencode({'url': url})}"
 
 
 def check_alpha(start_ts):
     print('Checking alpha news...')
-    url = "https://api.foresightnews.pro/v2/feed?page=1&size=30"
+    url = build_bnalpha_proxy_url("https://api.foresightnews.pro/v2/feed?page=1&size=30")
+    headers = HEADERS.copy()
+    headers['CF-Alpha-Key'] = CF_BNALPHA_KEY
     response_data = fetch_json(
         requests.get,
         url=url,
         attempts=4,
-        timeout=(3, 30),
+        timeout=TIMEOUT,
+        headers=headers,
         error_message='Failed to fetch alpha news',
     )
     encoded_data = response_data.get('data')
