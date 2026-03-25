@@ -2,7 +2,6 @@ import asyncio
 import os
 import io
 import base64
-import re
 import json
 import time
 import traceback
@@ -190,36 +189,149 @@ class TelegramBot:
         except:
             await reply_message.edit_text(text=reply_text)
 
-    def split_message_with_codeblock(self, message):
-        # 匹配所有三个反引号的位置（考虑转义情况）
-        pattern = r'(?<!\\)(?:\\\\)*```'
-        matches = list(re.finditer(pattern, message))
-        
-        # 状态跟踪
-        in_code_block = False
-        last_open_index = -1  # 记录最后一个未闭合代码块的起始位置
-        
-        # 遍历所有匹配的反引号
-        for match in matches:
-            if not in_code_block:
-                # 遇到代码块开始
-                in_code_block = True
-                last_open_index = match.start()
-            else:
-                # 遇到代码块结束
-                in_code_block = False
-                last_open_index = -1  # 重置未闭合标记
-        
-        # 如果消息以未闭合代码块结束，则进行分割
-        if in_code_block and last_open_index >= 0:
-            # 第一条消息：从头到未闭合代码块开始之前（确保闭合）
-            part1 = message[:last_open_index]
-            # 第二条消息：从未闭合代码块开始到结束
-            part2 = message[last_open_index:]
-            return [part1, part2]
-        
-        # 无需分割
-        return [message]
+    @staticmethod
+    def _is_escaped(text, index):
+        backslashes = 0
+        i = index - 1
+        while i >= 0 and text[i] == "\\":
+            backslashes += 1
+            i -= 1
+        return (backslashes % 2) == 1
+
+    def _scan_markdown_state(self, text):
+        state = {
+            "code_fence": False,
+            "latex_block_dollar": False,
+            "latex_block_bracket": False,
+            "latex_inline_paren": False,
+            "latex_inline_dollar": False,
+        }
+        i = 0
+        n = len(text)
+        while i < n:
+            if text.startswith("```", i) and (not self._is_escaped(text, i)):
+                state["code_fence"] = not state["code_fence"]
+                i += 3
+                continue
+
+            if state["code_fence"]:
+                i += 1
+                continue
+
+            if text.startswith("\\[", i) and (not self._is_escaped(text, i)):
+                state["latex_block_bracket"] = True
+                i += 2
+                continue
+            if text.startswith("\\]", i) and (not self._is_escaped(text, i)):
+                state["latex_block_bracket"] = False
+                i += 2
+                continue
+            if text.startswith("\\(", i) and (not self._is_escaped(text, i)):
+                state["latex_inline_paren"] = True
+                i += 2
+                continue
+            if text.startswith("\\)", i) and (not self._is_escaped(text, i)):
+                state["latex_inline_paren"] = False
+                i += 2
+                continue
+            if text.startswith("$$", i) and (not self._is_escaped(text, i)):
+                state["latex_block_dollar"] = not state["latex_block_dollar"]
+                i += 2
+                continue
+            if text[i] == "$" and (not self._is_escaped(text, i)):
+                state["latex_inline_dollar"] = not state["latex_inline_dollar"]
+                i += 1
+                continue
+
+            i += 1
+        return state
+
+    @staticmethod
+    def _state_balanced(state):
+        return not (
+            state["code_fence"]
+            or state["latex_block_dollar"]
+            or state["latex_block_bracket"]
+            or state["latex_inline_paren"]
+            or state["latex_inline_dollar"]
+        )
+
+    @staticmethod
+    def _boundary_markers_from_state(state):
+        closing = []
+        reopening = []
+        if state["code_fence"]:
+            closing.append("\n```")
+            reopening.append("```\n")
+        if state["latex_block_dollar"]:
+            closing.append("\n$$")
+            reopening.append("$$\n")
+        if state["latex_block_bracket"]:
+            closing.append("\\]")
+            reopening.append("\\[")
+        if state["latex_inline_paren"]:
+            closing.append("\\)")
+            reopening.append("\\(")
+        if state["latex_inline_dollar"]:
+            closing.append("$")
+            reopening.append("$")
+        return "".join(closing), "".join(reopening)
+
+    def _close_unfinished_markdown(self, text, max_len=4096):
+        base = text or ""
+        state = self._scan_markdown_state(base)
+        closing, _ = self._boundary_markers_from_state(state)
+        if closing:
+            allowed_len = max(0, max_len - len(closing))
+            base = base[:allowed_len]
+            return base + closing
+        return base[:max_len]
+
+    def split_message_for_markdown(self, message, limit=4096):
+        if len(message) <= limit:
+            return message, ""
+
+        split_idx = limit
+        min_limit = max(1, int(limit * 0.65))
+        separators = set(["\n", " ", "\t", "。", "，", ",", ".", "!", "?", "；", ";", "：", ":"])
+        for idx in range(limit, min_limit, -1):
+            if message[idx - 1] not in separators:
+                continue
+            state = self._scan_markdown_state(message[:idx])
+            if self._state_balanced(state):
+                split_idx = idx
+                break
+
+        head_raw = message[:split_idx]
+        tail_raw = message[split_idx:]
+
+        state = self._scan_markdown_state(head_raw)
+        closing, reopening = self._boundary_markers_from_state(state)
+
+        allowed_head_len = max(1, limit - len(closing))
+        head_core = head_raw[:allowed_head_len]
+        head = head_core + closing
+        carry_over = head_raw[allowed_head_len:]
+        tail = reopening + carry_over + tail_raw
+        return head, tail
+
+    def build_streaming_text(self, text):
+        cursor = "▌"
+        clean_text = self._close_unfinished_markdown(text, max_len=4096-len(cursor))
+        if not clean_text.strip():
+            return cursor
+        return clean_text + cursor
+
+    async def keep_typing(self, chat_id, stop_event, interval=4.0):
+        while not stop_event.is_set():
+            try:
+                await self.application.bot.send_chat_action(chat_id=chat_id, action="typing")
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                continue
 
     def ensure_aichat_context(self, chat_id):
         if (chat_id not in self.aichat_contexts.keys()) or (not self.aichat_contexts[chat_id]):
@@ -364,6 +476,8 @@ class TelegramBot:
         user_id = str(incoming_message.from_user.id)
         if user_id not in self.whitelist:
             return
+        typing_stop_event = None
+        typing_task = None
         try:
             replied_message = incoming_message.reply_to_message
             if not replied_message or not replied_message.from_user or replied_message.from_user.id != context.bot.id:
@@ -375,6 +489,8 @@ class TelegramBot:
 
             chat_id = str(incoming_message.chat.id)
             message_id = incoming_message.message_id
+            typing_stop_event = asyncio.Event()
+            typing_task = asyncio.create_task(self.keep_typing(chat_id, typing_stop_event))
             fast_reply = await self.application.bot.send_message(
                 chat_id=chat_id,
                 text="容我想想...",
@@ -395,28 +511,25 @@ class TelegramBot:
                 current_message += chunk
                 buffer_text += chunk
                 if len(current_message) > 4096:
-                    finished_message = current_message[:4096]
-                    current_message = current_message[4096:]
-                    splited_messages = self.split_message_with_codeblock(finished_message)
-                    if len(splited_messages) == 2:
-                        finished_message = splited_messages[0]
-                        current_message = splited_messages[1] + current_message
+                    finished_message, current_message = self.split_message_for_markdown(current_message, limit=4096)
                     await self.edit_reply(fast_reply, finished_message)
                     await asyncio.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
                     if len(current_message.strip()) > 0:
                         new_message = current_message
                     else:
-                        new_message = '-'
+                        new_message = ''
                     fast_reply = await self.application.bot.send_message(chat_id=chat_id,
-                        text=new_message, reply_to_message_id=message_id)
+                        text=self.build_streaming_text(new_message), reply_to_message_id=message_id)
                     await asyncio.sleep(1.5)
                     buffer_text = ''
                     continue
                 if len(buffer_text) > 100:
-                    await self.edit_reply(fast_reply, current_message)
+                    await self.edit_reply(fast_reply, self.build_streaming_text(current_message))
                     buffer_text = ''
                     await asyncio.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
-            reply_text = current_message + '\n(无语，和你说不下去，典型的碳基生物思维)'
+            reply_text = current_message if current_message.strip() else "（空回复）"
+            if reply_text != "（空回复）":
+                reply_text = self._close_unfinished_markdown(reply_text, max_len=4096)
             await self.edit_reply(fast_reply, reply_text[:4096])
             self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
             self.trim_aichat_context(chat_id)
@@ -424,6 +537,14 @@ class TelegramBot:
         except Exception as e:
             traceback.print_exc()
             await update.effective_message.reply_text('Error:\n' + str(e))
+        finally:
+            if typing_stop_event:
+                typing_stop_event.set()
+            if typing_task:
+                try:
+                    await typing_task
+                except Exception:
+                    pass
 
     def add_handlers(self):
         self.application.add_handler(CommandHandler('start', self.start_command))
