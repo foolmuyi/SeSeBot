@@ -5,19 +5,22 @@ import base64
 import json
 import time
 import traceback
-from pixiv import *
-from aichat import *
-from jandan import *
-from javdb import *
-from bnalpha import *
+from collections import deque
+from pixiv import download_pixiv_img, get_pixiv_ranking
+from aichat import stream_ai_response
+from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
+from javdb import get_javdb_ranking, download_javdb_img, get_javdb_reviews, get_javdb_preview
+from bnalpha import check_alpha
 from dotenv import load_dotenv
 from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import TimedOut
+from telegram.error import TimedOut, BadRequest, RetryAfter
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, CallbackQueryHandler
 
 
 class TelegramBot:
+    FILTERED_MAXLEN = 400
+
     def __init__(self, token):
         self.application = Application.builder().token(token).build()
         self.filtered = {}
@@ -26,6 +29,17 @@ class TelegramBot:
         whitelist_path = os.path.join(dir_path, "whitelist.json")
         with open(whitelist_path, "r") as f:
             self.whitelist = json.load(f)
+
+    def get_filtered_bucket(self, chat_id):
+        filtered_bucket = self.filtered.get(chat_id)
+        if isinstance(filtered_bucket, deque):
+            return filtered_bucket
+        if filtered_bucket is None:
+            filtered_bucket = deque(maxlen=self.FILTERED_MAXLEN)
+        else:
+            filtered_bucket = deque(filtered_bucket, maxlen=self.FILTERED_MAXLEN)
+        self.filtered[chat_id] = filtered_bucket
+        return filtered_bucket
 
     @staticmethod
     def check_access(func):
@@ -47,25 +61,51 @@ class TelegramBot:
         else:
             return False
 
+    @staticmethod
+    def should_send_as_photo(media_bytes):
+        try:
+            with Image.open(io.BytesIO(media_bytes)) as image:
+                img_width, img_height = image.size
+        except Exception:
+            return False
+        if img_width <= 0 or img_height <= 0:
+            return False
+        return (
+            (len(media_bytes) < 10 * 1024 * 1024)
+            and ((img_width + img_height) < 10000)
+            and (0.05 < (img_height / img_width) < 20)
+        )
+
+    async def send_image_media(self, chat_id, media_bytes, filename=None, as_animation=False):
+        if as_animation:
+            animation_kwargs = {}
+            if filename:
+                animation_kwargs["filename"] = filename
+            await self.application.bot.send_animation(chat_id=chat_id, animation=media_bytes, **animation_kwargs)
+            return
+
+        if self.should_send_as_photo(media_bytes):
+            await self.application.bot.send_photo(chat_id=chat_id, photo=media_bytes)
+            return
+
+        document_kwargs = {"chat_id": chat_id, "document": media_bytes}
+        if filename:
+            document_kwargs["filename"] = filename
+        await self.application.bot.send_document(**document_kwargs)
+
     async def get_pixiv_imgs(self, update, mode):
         await update.effective_message.reply_text('我知道你很急，但你先别急！')
         try:
             chat_id = str(update.effective_message.chat.id)
-            if chat_id not in self.filtered.keys():
-                self.filtered[chat_id] = []
-            msg = await asyncio.to_thread(get_pixiv_ranking, mode, self.filtered[chat_id], 2)
+            filtered_bucket = self.get_filtered_bucket(chat_id)
+            msg = await asyncio.to_thread(get_pixiv_ranking, mode, filtered_bucket, 2)
             artworks_url = msg['artworks_url']
             artworks_id = artworks_url.split("/")[-1]
-            self.filtered[chat_id].append(artworks_id)
+            filtered_bucket.append(artworks_id)
             for img_url in msg['imgs_url']:
                 img = await asyncio.to_thread(download_pixiv_img, img_url, artworks_url)
-                img_width, img_height = Image.open(io.BytesIO(img)).size
-                if ((len(img) < 10*1024*1024) and ((img_width + img_height) < 10000) 
-                    and (0.05 < img_height/img_width < 20)):
-                    await self.application.bot.send_photo(chat_id=chat_id, photo=img)
-                else:
-                    filename = img_url.split("/")[-1]
-                    await self.application.bot.send_document(chat_id=chat_id, document=img, filename=filename)
+                filename = img_url.split("/")[-1]
+                await self.send_image_media(chat_id=chat_id, media_bytes=img, filename=filename)
             await update.effective_message.reply_text(artworks_url)
         except Exception as e:
             traceback.print_exc()
@@ -83,22 +123,16 @@ class TelegramBot:
                 await self.application.bot.send_message(chat_id=chat_id, text='沙雕图来咯')
         has_comment = False
         try:
-            if chat_id not in self.filtered.keys():
-                self.filtered[chat_id] = []
-            comment = await asyncio.to_thread(get_top_comments, self.filtered[chat_id])
+            filtered_bucket = self.get_filtered_bucket(chat_id)
+            comment = await asyncio.to_thread(get_top_comments, filtered_bucket)
             comment_id = comment['comment_id']
             has_comment = True
-            self.filtered[chat_id].append(comment_id)
+            filtered_bucket.append(comment_id)
             for img_url in comment['img_urls']:
                 filename = img_url.split('/')[-1]
                 img = await asyncio.to_thread(get_comment_img, img_url)
-                img_width, img_height = Image.open(io.BytesIO(img)).size
-                if img_url.split('.')[-1] == 'gif':
-                    await self.application.bot.send_animation(chat_id=chat_id, animation=img, filename=filename)
-                elif ((len(img) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
-                    await self.application.bot.send_photo(chat_id=chat_id, photo=img)
-                else:
-                    await self.application.bot.send_document(chat_id=chat_id, document=img, filename=filename)
+                is_gif = img_url.lower().endswith('.gif')
+                await self.send_image_media(chat_id=chat_id, media_bytes=img, filename=filename, as_animation=is_gif)
         except TimedOut:  # Telegram自身Bug：发送成功后仍有可能收到TimeOut异常
             traceback.print_exc()
         except Exception as e:
@@ -117,23 +151,18 @@ class TelegramBot:
     async def get_javdb_cover(self, update):
         try:
             chat_id = str(update.effective_message.chat.id)
-            if chat_id not in self.filtered.keys():
-                self.filtered[chat_id] = []
-            msg = await asyncio.to_thread(get_javdb_ranking, self.filtered[chat_id])
+            filtered_bucket = self.get_filtered_bucket(chat_id)
+            msg = await asyncio.to_thread(get_javdb_ranking, filtered_bucket)
             movie_url = 'https://javdb.com' + msg['href']
             movie_title = msg['title']
             movie_cover_url = msg['img_src']
             movie_code = msg['code']
             movie_score = msg['score']
-            self.filtered[chat_id].append(movie_code)
+            filtered_bucket.append(movie_code)
             movie_info_msg = f"{movie_code}  {movie_title}\n{movie_score}\n{movie_url}\n"
             movie_cover = await asyncio.to_thread(download_javdb_img, movie_cover_url)
-            img_width, img_height = Image.open(io.BytesIO(movie_cover)).size
-            if ((len(movie_cover) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
-                    await self.application.bot.send_photo(chat_id=chat_id, photo=movie_cover)
-            else:
-                filename = movie_cover_url.split("/")[-1]
-                await self.application.bot.send_document(chat_id=chat_id, document=movie_cover, filename=filename)
+            filename = movie_cover_url.split("/")[-1]
+            await self.send_image_media(chat_id=chat_id, media_bytes=movie_cover, filename=filename)
             movie_reviews = await asyncio.to_thread(get_javdb_reviews, msg['href'])
             if movie_reviews:
                 for each in movie_reviews:
@@ -157,12 +186,8 @@ class TelegramBot:
             image_urls = await asyncio.to_thread(get_javdb_preview, href)
             for image_url in image_urls:
                 preview_image = await asyncio.to_thread(download_javdb_img, image_url)
-                img_width, img_height = Image.open(io.BytesIO(preview_image)).size
-                if ((len(preview_image) < 10*1024*1024) and ((img_width + img_height) < 10000) and (0.05 < img_height/img_width < 20)):
-                        await self.application.bot.send_photo(chat_id=chat_id, photo=preview_image)
-                else:
-                    filename = image_url.split("/")[-1]
-                    await self.application.bot.send_document(chat_id=chat_id, document=preview_image, filename=filename)
+                filename = image_url.split("/")[-1]
+                await self.send_image_media(chat_id=chat_id, media_bytes=preview_image, filename=filename)
                 await asyncio.sleep(1.5)
         except Exception as e:
             traceback.print_exc()
@@ -183,11 +208,56 @@ class TelegramBot:
         else:
             print("No alpha news found.")
 
+    @staticmethod
+    def is_message_not_modified_error(exc):
+        return "message is not modified" in str(exc).lower()
+
     async def edit_reply(self, reply_message, reply_text):
         try:
             await reply_message.edit_text(text=reply_text, parse_mode='Markdown')
-        except:
+            return
+        except BadRequest as exc:
+            if self.is_message_not_modified_error(exc):
+                return
+        except RetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after) + 0.2)
+            try:
+                await reply_message.edit_text(text=reply_text, parse_mode='Markdown')
+                return
+            except BadRequest as retry_exc:
+                if self.is_message_not_modified_error(retry_exc):
+                    return
+            except TimedOut:
+                return
+            except Exception:
+                pass
+        except TimedOut:
+            return
+        except Exception:
+            pass
+
+        try:
             await reply_message.edit_text(text=reply_text)
+        except BadRequest as exc:
+            if self.is_message_not_modified_error(exc):
+                return
+            traceback.print_exc()
+        except RetryAfter as exc:
+            await asyncio.sleep(float(exc.retry_after) + 0.2)
+            try:
+                await reply_message.edit_text(text=reply_text)
+            except BadRequest as retry_exc:
+                if self.is_message_not_modified_error(retry_exc):
+                    return
+                traceback.print_exc()
+            except TimedOut:
+                return
+            except Exception:
+                traceback.print_exc()
+        except TimedOut:
+            return
+        except Exception:
+            traceback.print_exc()
 
     @staticmethod
     def _is_escaped(text, index):
@@ -426,7 +496,7 @@ class TelegramBot:
             await update.message.reply_text("欢迎使用")
         else:
             await update.message.reply_text("历史记录已清除,仿佛身体被掏空")
-        self.filtered[chat_id] = []
+        self.filtered[chat_id] = deque(maxlen=self.FILTERED_MAXLEN)
         self.aichat_contexts[chat_id] = []
 
     @check_access
