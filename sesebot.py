@@ -1,6 +1,7 @@
 import asyncio
 import os
 import io
+import base64
 import re
 import json
 import time
@@ -220,6 +221,92 @@ class TelegramBot:
         # 无需分割
         return [message]
 
+    def ensure_aichat_context(self, chat_id):
+        if (chat_id not in self.aichat_contexts.keys()) or (not self.aichat_contexts[chat_id]):
+            self.aichat_contexts[chat_id] = [
+                {"role": "system", "content": "注意，可以结合上下文，但只需回答最新的一个问题，请使用中文。"}
+            ]
+
+    def estimate_message_size(self, content):
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            total_size = 0
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    total_size += len(item.get("text", ""))
+                elif item.get("type") == "image_url":
+                    total_size += 800
+                else:
+                    total_size += 200
+            return total_size
+        return len(str(content))
+
+    def trim_aichat_context(self, chat_id, max_context_size=10000):
+        est_tokens = sum([self.estimate_message_size(message['content']) for message in self.aichat_contexts[chat_id]])
+        while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > max_context_size):
+            del self.aichat_contexts[chat_id][1]
+            est_tokens = sum([self.estimate_message_size(message['content']) for message in self.aichat_contexts[chat_id]])
+
+    async def _download_file_bytes(self, tg_file):
+        if hasattr(tg_file, "download_as_bytearray"):
+            file_bytes = await tg_file.download_as_bytearray()
+            return bytes(file_bytes)
+        if hasattr(tg_file, "download_to_memory"):
+            buffer = io.BytesIO()
+            await tg_file.download_to_memory(out=buffer)
+            return buffer.getvalue()
+        raise RuntimeError("当前 telegram 版本不支持图片下载接口")
+
+    async def _extract_image_data_url(self, message):
+        if not message:
+            return None
+        mime_type = None
+        tg_file = None
+        if message.photo:
+            mime_type = "image/jpeg"
+            tg_file = await message.photo[-1].get_file()
+        elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+            mime_type = message.document.mime_type
+            tg_file = await message.document.get_file()
+        if not tg_file:
+            return None
+        file_bytes = await self._download_file_bytes(tg_file)
+        if len(file_bytes) > 8 * 1024 * 1024:
+            raise ValueError("图片太大，请压缩到 8MB 以内再试。")
+        base64_data = base64.b64encode(file_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{base64_data}"
+
+    async def build_user_multimodal_content(self, message):
+        message_text = (message.text or message.caption or "").strip()
+        image_data_urls = []
+        current_message_image = await self._extract_image_data_url(message)
+        if current_message_image:
+            image_data_urls.append(current_message_image)
+        # 用户回复图片消息但自己只发了文本时，自动附上关联图片
+        if (not image_data_urls) and message.reply_to_message:
+            replied_image = await self._extract_image_data_url(message.reply_to_message)
+            if replied_image:
+                image_data_urls.append(replied_image)
+
+        if not message_text and not image_data_urls:
+            return None, None
+
+        if image_data_urls:
+            prompt_text = message_text if message_text else "请描述并分析这张图片。"
+            content = [{"type": "text", "text": prompt_text}]
+            for image_data_url in image_data_urls:
+                content.append({"type": "image_url", "image_url": {"url": image_data_url}})
+            if message_text:
+                context_text = f"{message_text}\n[附带图片 {len(image_data_urls)} 张]"
+            else:
+                context_text = "[用户发送了图片]"
+            return content, context_text
+
+        return message_text, message_text
+
     @check_access
     async def start_command(self, update, context):
         chat_id = str(update.message.chat.id)
@@ -271,66 +358,69 @@ class TelegramBot:
             await self.get_javdb_details(update, param)
 
     async def handle_message(self, update, context):
-        user_id = str(update.effective_message.from_user.id)
+        incoming_message = update.effective_message
+        if not incoming_message or not incoming_message.from_user:
+            return
+        user_id = str(incoming_message.from_user.id)
         if user_id not in self.whitelist:
             return
-        message_text = update.effective_message.text or update.effective_message.caption
-        if message_text:
-            lower_message_text = message_text.lower()
-        else:
-            return  # 忽略不含文本的纯媒体消息
         try:
-            if update.effective_message.reply_to_message and update.effective_message.reply_to_message.from_user.id == context.bot.id:
-                replied_msg = update.effective_message.reply_to_message
-                if replied_msg.photo and not (replied_msg.text or replied_msg.caption):
-                    return  # 纯图片不回复
-                chat_id = str(update.effective_message.chat.id)
-                message_id = update.effective_message.message_id
-                fast_reply = await self.application.bot.send_message(chat_id=chat_id, text=("容我想想..."), 
-                    reply_to_message_id=message_id)
-                if chat_id not in self.aichat_contexts.keys():
-                    self.aichat_contexts[chat_id] = [{"role": "system", "content": "注意，可以结合上下文，但只需回答最新的一个问题，请使用中文。"}]
-                self.aichat_contexts[chat_id].append({"role": "user", "content": message_text})
-                est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
-                while (len(self.aichat_contexts[chat_id]) > 2) and (est_tokens > 10000):
-                    del self.aichat_contexts[chat_id][1]
-                    est_tokens = sum([len(message['content']) for message in self.aichat_contexts[chat_id]])
-                print('Waiting for LLM response...')
-                full_text = ''    # 整个回答完整文本
-                current_message = ''    # 最新一条消息
-                buffer_text = ''    # 单次消息更新
-                async for chunk in stream_ai_response(self.aichat_contexts[chat_id]):
-                    full_text += chunk
-                    current_message += chunk
-                    buffer_text += chunk
-                    if len(current_message) > 4096:
-                        finished_message = current_message[:4096]
-                        current_message = current_message[4096:]
-                        splited_messages = self.split_message_with_codeblock(finished_message)
-                        if len(splited_messages) == 2:
-                            finished_message = splited_messages[0]
-                            current_message = splited_messages[1] + current_message
-                        await self.edit_reply(fast_reply, finished_message)
-                        await asyncio.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
-                        if len(current_message.strip()) > 0:
-                            new_message = current_message
-                        else:
-                            new_message = '-'
-                        fast_reply = await self.application.bot.send_message(chat_id=chat_id, 
-                            text=new_message, reply_to_message_id=message_id)
-                        await asyncio.sleep(1.5)
-                        buffer_text = ''
-                        continue
-                    if len(buffer_text) > 100:
-                        await self.edit_reply(fast_reply, current_message)
-                        buffer_text = ''
-                        await asyncio.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
-                reply_text = current_message + '\n(无语，和你说不下去，典型的碳基生物思维)'
-                await self.edit_reply(fast_reply, reply_text[:4096])
-                self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
-                print('Reply sent successfully')
-            else:
-                pass
+            replied_message = incoming_message.reply_to_message
+            if not replied_message or not replied_message.from_user or replied_message.from_user.id != context.bot.id:
+                return
+
+            user_content, user_context_text = await self.build_user_multimodal_content(incoming_message)
+            if user_content is None:
+                return
+
+            chat_id = str(incoming_message.chat.id)
+            message_id = incoming_message.message_id
+            fast_reply = await self.application.bot.send_message(
+                chat_id=chat_id,
+                text="容我想想...",
+                reply_to_message_id=message_id,
+            )
+
+            self.ensure_aichat_context(chat_id)
+            self.trim_aichat_context(chat_id)
+            llm_messages = self.aichat_contexts[chat_id] + [{"role": "user", "content": user_content}]
+            self.aichat_contexts[chat_id].append({"role": "user", "content": user_context_text})
+
+            print('Waiting for LLM response...')
+            full_text = ''    # 整个回答完整文本
+            current_message = ''    # 最新一条消息
+            buffer_text = ''    # 单次消息更新
+            async for chunk in stream_ai_response(llm_messages):
+                full_text += chunk
+                current_message += chunk
+                buffer_text += chunk
+                if len(current_message) > 4096:
+                    finished_message = current_message[:4096]
+                    current_message = current_message[4096:]
+                    splited_messages = self.split_message_with_codeblock(finished_message)
+                    if len(splited_messages) == 2:
+                        finished_message = splited_messages[0]
+                        current_message = splited_messages[1] + current_message
+                    await self.edit_reply(fast_reply, finished_message)
+                    await asyncio.sleep(1.5)  # MAX_MESSAGES_PER_SECOND_PER_CHAT = 1
+                    if len(current_message.strip()) > 0:
+                        new_message = current_message
+                    else:
+                        new_message = '-'
+                    fast_reply = await self.application.bot.send_message(chat_id=chat_id,
+                        text=new_message, reply_to_message_id=message_id)
+                    await asyncio.sleep(1.5)
+                    buffer_text = ''
+                    continue
+                if len(buffer_text) > 100:
+                    await self.edit_reply(fast_reply, current_message)
+                    buffer_text = ''
+                    await asyncio.sleep(3.5)  # MAX_MESSAGES_PER_MINUTE_PER_GROUP = 20
+            reply_text = current_message + '\n(无语，和你说不下去，典型的碳基生物思维)'
+            await self.edit_reply(fast_reply, reply_text[:4096])
+            self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
+            self.trim_aichat_context(chat_id)
+            print('Reply sent successfully')
         except Exception as e:
             traceback.print_exc()
             await update.effective_message.reply_text('Error:\n' + str(e))
@@ -342,7 +432,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))
-        self.application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.CAPTION, self.handle_message))
+        ai_chat_filters = (filters.TEXT | filters.PHOTO | filters.Document.IMAGE) & (~filters.COMMAND)
+        self.application.add_handler(MessageHandler(ai_chat_filters, self.handle_message))
 
     async def job_wrapper(self, context):
         await self.get_jandan_imgs(update=None, context=context)
