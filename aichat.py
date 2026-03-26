@@ -9,7 +9,7 @@ load_dotenv()
 API_KEY = os.getenv('GROK_API_KEY')
 client = OpenAI(api_key=API_KEY, base_url="https://api.x.ai/v1")
 DEFAULT_MODEL = "grok-4-1-fast-reasoning"
-VISION_MODEL = "grok-4-1-fast-reasoning"
+VISION_MODEL = "grok-4.20-0309-reasoning"
 # 预留给 Responses API 的 tools，后续可直接填入 web_search/function 等定义。
 RESPONSE_TOOLS = []
 RESPONSE_TOOL_CHOICE = None

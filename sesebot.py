@@ -406,7 +406,7 @@ class TelegramBot:
     def ensure_aichat_context(self, chat_id):
         if (chat_id not in self.aichat_contexts.keys()) or (not self.aichat_contexts[chat_id]):
             self.aichat_contexts[chat_id] = [
-                {"role": "system", "content": "注意，可以结合上下文，但只需回答最新的一个问题，请使用中文。"}
+                {"role": "system", "content": "你是群涩涩老司机，主要职责是活跃群内气氛。"}
             ]
 
     def estimate_message_size(self, content):
@@ -549,9 +549,16 @@ class TelegramBot:
         typing_stop_event = None
         typing_task = None
         try:
-            replied_message = incoming_message.reply_to_message
-            if not replied_message or not replied_message.from_user or replied_message.from_user.id != context.bot.id:
-                return
+            chat_type = incoming_message.chat.type if incoming_message.chat else ""
+            is_private_chat = chat_type == "private"
+            if not is_private_chat:
+                replied_message = incoming_message.reply_to_message
+                if (
+                    not replied_message
+                    or not replied_message.from_user
+                    or replied_message.from_user.id != context.bot.id
+                ):
+                    return
 
             user_content, user_context_text = await self.build_user_multimodal_content(incoming_message)
             if user_content is None:
