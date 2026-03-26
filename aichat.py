@@ -1,6 +1,10 @@
 import asyncio
+import json
 import os
+import re
 import threading
+import time
+from collections import OrderedDict
 from dotenv import load_dotenv
 from openai import OpenAI
 import requests
@@ -60,6 +64,15 @@ EXA_TIMEOUT_SECONDS = _parse_float_env("EXA_TIMEOUT_SECONDS", 8.0, min_value=1.0
 EXA_MAX_RESULTS = _parse_int_env("EXA_MAX_RESULTS", 5, min_value=1, max_value=10)
 EXA_QUERY_MAX_CHARS = _parse_int_env("EXA_QUERY_MAX_CHARS", 300, min_value=50, max_value=1200)
 EXA_SNIPPET_MAX_CHARS = _parse_int_env("EXA_SNIPPET_MAX_CHARS", 220, min_value=80, max_value=1200)
+EXA_DECISION_MODEL = os.getenv("EXA_DECISION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+EXA_DECISION_MAX_OUTPUT_TOKENS = _parse_int_env("EXA_DECISION_MAX_OUTPUT_TOKENS", 24, min_value=8, max_value=128)
+EXA_DECISION_CONTEXT_MESSAGES = _parse_int_env("EXA_DECISION_CONTEXT_MESSAGES", 6, min_value=2, max_value=20)
+EXA_DECISION_TEXT_MAX_CHARS = _parse_int_env("EXA_DECISION_TEXT_MAX_CHARS", 320, min_value=100, max_value=1200)
+EXA_DECISION_CACHE_TTL_SECONDS = _parse_float_env("EXA_DECISION_CACHE_TTL_SECONDS", 600.0, min_value=30.0, max_value=86400.0)
+EXA_DECISION_CACHE_MAX_SIZE = _parse_int_env("EXA_DECISION_CACHE_MAX_SIZE", 256, min_value=32, max_value=2048)
+
+_EXA_DECISION_CACHE = OrderedDict()
+_EXA_DECISION_CACHE_LOCK = threading.Lock()
 
 
 def _message_has_image(messages):
@@ -201,6 +214,143 @@ def _extract_latest_user_text(messages):
     return ""
 
 
+def _build_decision_context(messages):
+    lines = []
+    for message in reversed(messages):
+        role = message.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = _extract_text_from_content(message.get("content", ""))
+        text = _normalize_whitespace(text)
+        if not text:
+            continue
+        lines.append(f"{role}: {_clip_text(text, EXA_DECISION_TEXT_MAX_CHARS)}")
+        if len(lines) >= EXA_DECISION_CONTEXT_MESSAGES:
+            break
+    lines.reverse()
+    return "\n".join(lines).strip()
+
+
+def _get_cached_exa_decision(cache_key):
+    now_ts = time.time()
+    with _EXA_DECISION_CACHE_LOCK:
+        item = _EXA_DECISION_CACHE.get(cache_key)
+        if item is None:
+            return None
+        expires_at, value = item
+        if now_ts >= expires_at:
+            _EXA_DECISION_CACHE.pop(cache_key, None)
+            return None
+        _EXA_DECISION_CACHE.move_to_end(cache_key)
+        return bool(value)
+
+
+def _set_cached_exa_decision(cache_key, value):
+    expires_at = time.time() + EXA_DECISION_CACHE_TTL_SECONDS
+    with _EXA_DECISION_CACHE_LOCK:
+        _EXA_DECISION_CACHE[cache_key] = (expires_at, bool(value))
+        _EXA_DECISION_CACHE.move_to_end(cache_key)
+        while len(_EXA_DECISION_CACHE) > EXA_DECISION_CACHE_MAX_SIZE:
+            _EXA_DECISION_CACHE.popitem(last=False)
+
+
+def _extract_response_output_text(response_obj):
+    output_text = getattr(response_obj, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    output_items = getattr(response_obj, "output", None)
+    if isinstance(output_items, list):
+        parts = []
+        for item in output_items:
+            content_items = getattr(item, "content", None)
+            if content_items is None and isinstance(item, dict):
+                content_items = item.get("content")
+            if not isinstance(content_items, list):
+                continue
+            for content_item in content_items:
+                item_type = getattr(content_item, "type", None)
+                if item_type is None and isinstance(content_item, dict):
+                    item_type = content_item.get("type")
+                if item_type not in {"output_text", "text"}:
+                    continue
+                text = getattr(content_item, "text", None)
+                if text is None and isinstance(content_item, dict):
+                    text = content_item.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+        if parts:
+            return "".join(parts).strip()
+    return ""
+
+
+def _parse_need_search(raw_text):
+    if not raw_text:
+        return None
+    normalized = raw_text.strip()
+
+    try:
+        parsed = json.loads(normalized)
+        if isinstance(parsed, dict):
+            need_search = parsed.get("need_search")
+            if isinstance(need_search, bool):
+                return need_search
+    except Exception:
+        pass
+
+    pattern = r'"?need_search"?\s*[:=]\s*(true|false)'
+    match = re.search(pattern, normalized, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).lower() == "true"
+
+    lower_text = normalized.lower()
+    if lower_text in {"true", "yes", "1"}:
+        return True
+    if lower_text in {"false", "no", "0"}:
+        return False
+    return None
+
+
+def _should_use_exa_by_model(messages, query):
+    cache_key = query.lower()
+    cached_decision = _get_cached_exa_decision(cache_key)
+    if cached_decision is not None:
+        return cached_decision
+
+    context_text = _build_decision_context(messages)
+    decision_instructions = (
+        "You are a strict router for web search.\n"
+        "Decide whether external web search is REQUIRED to answer the latest user query reliably.\n"
+        "Return ONLY a JSON object with one field:\n"
+        '{"need_search": true} or {"need_search": false}\n'
+        "Set true only when the answer likely needs up-to-date facts, real-time info, recent events,"
+        " prices, schedules, or source verification.\n"
+        "Set false for general knowledge, coding, writing, translation, explanation, brainstorming,"
+        " or subjective discussion."
+    )
+
+    decision_prompt_lines = []
+    if context_text:
+        decision_prompt_lines.append("Recent conversation:")
+        decision_prompt_lines.append(context_text)
+        decision_prompt_lines.append("")
+    decision_prompt_lines.append(f"Latest user query: {query}")
+    decision_prompt = "\n".join(decision_prompt_lines)
+
+    response = client.responses.create(
+        model=EXA_DECISION_MODEL,
+        input=[{"role": "user", "content": [{"type": "input_text", "text": decision_prompt}]}],
+        instructions=decision_instructions,
+        max_output_tokens=EXA_DECISION_MAX_OUTPUT_TOKENS,
+    )
+    raw_text = _extract_response_output_text(response)
+    decision = _parse_need_search(raw_text)
+    if decision is None:
+        decision = False
+    _set_cached_exa_decision(cache_key, decision)
+    return decision
+
+
 def _parse_exa_results(payload):
     if not isinstance(payload, dict):
         return []
@@ -310,10 +460,21 @@ def _should_skip_exa_for_image_prompt(messages, query):
 
 
 def _augment_messages_with_exa(messages):
+    if (not EXA_ENABLED) or (not EXA_API_KEY):
+        return messages
+
     query = _extract_latest_user_text(messages)
     if not query:
         return messages
     if _should_skip_exa_for_image_prompt(messages, query):
+        return messages
+
+    try:
+        need_search = _should_use_exa_by_model(messages, query)
+    except Exception as exc:
+        print(f"[Exa] 搜索判定失败，回退到模型直答: {exc}")
+        return messages
+    if not need_search:
         return messages
 
     try:
