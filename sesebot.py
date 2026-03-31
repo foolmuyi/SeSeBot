@@ -867,9 +867,10 @@ if __name__ == '__main__':
     log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
     logging.basicConfig(
-        level=log_level,
+        level=logging.ERROR,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    logger.setLevel(log_level)
     token = os.getenv('BOT_TOKEN')
     bot = TelegramBot(token)
     bot.run()
