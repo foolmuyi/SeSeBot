@@ -16,7 +16,7 @@ def fetch_response(
     last_exc = None
     for attempt in range(1, attempts + 1):
         try:
-            logger.debug("Fetching %s (attempt %s/%s)", url, attempt, attempts)
+            logger.info("Fetching %s (attempt %s/%s)", url, attempt, attempts)
             if timeout is not None:
                 response = request_func(url=url, timeout=timeout, **kwargs)
             else:
