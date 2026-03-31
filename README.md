@@ -17,6 +17,7 @@ pip3 install -r requirements.txt
 - Create `.env` and set the following environment variables:
   -  `BOT_TOKEN`: your Telegram bot token
   -  `GROUP_CHAT_ID`: the `chat_id` of your Telegram group
+  -  `BOT_TIMEZONE` (optional): timezone for reminders, default `Asia/Shanghai`
   -  `PIXIV_COOKIE`: your Pixiv cookie
   -  `CF_PIXIV_URL`: your Pixiv Cloudflare worker url
   -  `CF_PIXIV_KEY`: your Pixiv Cloudflare worker authentication key
@@ -28,6 +29,10 @@ pip3 install -r requirements.txt
 ## Usage
 #### Run in Terminal
 `Python3 sesebot.py`
+
+#### Reminder command
+`/remind <natural language>`
+Example: `/remind 明天早上8点提醒我开会`
 
 #### Run as systemd service
 ```INI

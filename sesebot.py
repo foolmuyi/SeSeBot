@@ -5,9 +5,11 @@ import base64
 import json
 import time
 import traceback
+import uuid
 from collections import deque
+from datetime import datetime
 from pixiv import download_pixiv_img, get_pixiv_ranking
-from aichat import stream_ai_response
+from aichat import stream_ai_response, parse_reminder_request
 from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
 from javdb import get_javdb_ranking, download_javdb_img, get_javdb_reviews, get_javdb_preview
 from bnalpha import check_alpha
@@ -16,10 +18,12 @@ from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TimedOut, BadRequest, RetryAfter
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, CallbackQueryHandler
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class TelegramBot:
     FILTERED_MAXLEN = 400
+    DEFAULT_REMINDER_TEXT = "到时间了，记得看看"
 
     def __init__(self, token):
         self.application = Application.builder().token(token).build()
@@ -29,6 +33,14 @@ class TelegramBot:
         whitelist_path = os.path.join(dir_path, "whitelist.json")
         with open(whitelist_path, "r") as f:
             self.whitelist = json.load(f)
+        self.timezone_name = os.getenv("BOT_TIMEZONE", "Asia/Shanghai")
+        try:
+            self.timezone = ZoneInfo(self.timezone_name)
+        except ZoneInfoNotFoundError:
+            self.timezone_name = "Asia/Shanghai"
+            self.timezone = ZoneInfo(self.timezone_name)
+        self.reminder_store_path = os.path.join(dir_path, "reminders.json")
+        self.reminders = self.load_reminders()
 
     def get_filtered_bucket(self, chat_id):
         filtered_bucket = self.filtered.get(chat_id)
@@ -60,6 +72,139 @@ class TelegramBot:
             return True
         else:
             return False
+
+    def load_reminders(self):
+        if not os.path.exists(self.reminder_store_path):
+            return {}
+        try:
+            with open(self.reminder_store_path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+        except Exception:
+            traceback.print_exc()
+            return {}
+        if isinstance(raw_data, list):
+            reminder_items = raw_data
+        elif isinstance(raw_data, dict):
+            reminder_items = raw_data.values()
+        else:
+            return {}
+
+        reminders = {}
+        for item in reminder_items:
+            if not isinstance(item, dict):
+                continue
+            reminder_id = str(item.get("id", "")).strip()
+            chat_id = str(item.get("chat_id", "")).strip()
+            if (not reminder_id) or (not chat_id):
+                continue
+            try:
+                trigger_ts = float(item.get("trigger_ts", 0))
+            except (TypeError, ValueError):
+                continue
+            if trigger_ts <= 0:
+                continue
+            reminders[reminder_id] = {
+                "id": reminder_id,
+                "chat_id": chat_id,
+                "user_name": str(item.get("user_name", "")).strip(),
+                "user_username": str(item.get("user_username", "")).strip(),
+                "reminder_text": str(item.get("reminder_text", self.DEFAULT_REMINDER_TEXT)).strip() or self.DEFAULT_REMINDER_TEXT,
+                "trigger_ts": trigger_ts,
+            }
+        return reminders
+
+    def save_reminders(self):
+        reminders_data = sorted(self.reminders.values(), key=lambda item: item.get("trigger_ts", 0))
+        tmp_path = self.reminder_store_path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(reminders_data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.reminder_store_path)
+        except Exception:
+            traceback.print_exc()
+
+    def parse_remind_at(self, remind_at_text):
+        text = (remind_at_text or "").strip()
+        if not text:
+            return None
+        try:
+            if ("T" in text) or text.endswith("Z") or ("+" in text[10:]) or ("-" in text[10:]):
+                iso_text = text.replace("Z", "+00:00")
+                dt_value = datetime.fromisoformat(iso_text)
+                if dt_value.tzinfo is None:
+                    return dt_value.replace(tzinfo=self.timezone)
+                return dt_value.astimezone(self.timezone)
+        except ValueError:
+            pass
+        for dt_format in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text, dt_format).replace(tzinfo=self.timezone)
+            except ValueError:
+                continue
+        return None
+
+    def schedule_single_reminder(self, reminder):
+        reminder_id = reminder["id"]
+        job_name = f"user-reminder:{reminder_id}"
+        for existing_job in self.application.job_queue.get_jobs_by_name(job_name):
+            existing_job.schedule_removal()
+        delay_seconds = max(1.0, float(reminder["trigger_ts"]) - time.time())
+        self.application.job_queue.run_once(
+            self.send_reminder,
+            when=delay_seconds,
+            chat_id=reminder["chat_id"],
+            name=job_name,
+            data={"id": reminder_id},
+        )
+
+    def restore_pending_reminders(self):
+        if not self.reminders:
+            return
+        now_ts = time.time()
+        stale_ids = []
+        restored_count = 0
+        for reminder_id, reminder in self.reminders.items():
+            trigger_ts = float(reminder.get("trigger_ts", 0))
+            if trigger_ts <= now_ts:
+                stale_ids.append(reminder_id)
+                continue
+            self.schedule_single_reminder(reminder)
+            restored_count += 1
+        for reminder_id in stale_ids:
+            self.reminders.pop(reminder_id, None)
+        if stale_ids:
+            self.save_reminders()
+        if restored_count:
+            print(f"Restored {restored_count} reminder(s).")
+
+    async def send_reminder(self, context):
+        if not context.job or not context.job.data:
+            return
+        reminder_id = str(context.job.data.get("id", "")).strip()
+        if not reminder_id:
+            return
+        reminder = self.reminders.get(reminder_id)
+        if not reminder:
+            return
+        if reminder.get("user_username"):
+            target_user = f"@{reminder['user_username']}"
+        else:
+            target_user = reminder.get("user_name") or "你"
+        reminder_msg = f"⏰ {target_user}，提醒时间到了：{reminder['reminder_text']}"
+        try:
+            await context.bot.send_message(chat_id=reminder["chat_id"], text=reminder_msg)
+        except Exception:
+            traceback.print_exc()
+            self.application.job_queue.run_once(
+                self.send_reminder,
+                when=60,
+                chat_id=reminder["chat_id"],
+                name=f"user-reminder-retry:{reminder_id}",
+                data={"id": reminder_id},
+            )
+            return
+        self.reminders.pop(reminder_id, None)
+        self.save_reminders()
 
     @staticmethod
     def should_send_as_photo(media_bytes):
@@ -166,11 +311,11 @@ class TelegramBot:
             movie_reviews = await asyncio.to_thread(get_javdb_reviews, msg['href'])
             if movie_reviews:
                 for each in movie_reviews:
-                    movie_info_msg += f'\n{each['stars']}  {each['time']}\n{each['comment']}'
+                    movie_info_msg += f"\n{each['stars']}  {each['time']}\n{each['comment']}"
             if len(movie_info_msg) > 4096:
                 movie_info_msg = movie_info_msg[:4090] + '......'
             keyboard = [
-                [InlineKeyboardButton("让我康康", callback_data=f'detail:{msg['href']}'), 
+                [InlineKeyboardButton("让我康康", callback_data=f"detail:{msg['href']}"), 
                  InlineKeyboardButton("换一个", callback_data='next:null')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -523,6 +668,60 @@ class TelegramBot:
             traceback.print_exc()
             await update.effective_message.reply_text('Error:\n' + str(e))
 
+    @check_access
+    async def remind_command(self, update, context):
+        remind_input = " ".join(context.args).strip()
+        if not remind_input:
+            await update.effective_message.reply_text(
+                "用法：/remind <自然语言提醒>\n例如：/remind 明天早上8点提醒我开会"
+            )
+            return
+        try:
+            now_dt = datetime.now(self.timezone)
+            now_text = now_dt.strftime("%Y-%m-%d %H:%M")
+            parsed = await asyncio.to_thread(
+                parse_reminder_request,
+                remind_input,
+                now_text,
+                self.timezone_name,
+            )
+            if not parsed.get("is_reminder"):
+                await update.effective_message.reply_text("没有识别到提醒意图，请用“几点几分提醒我做什么”的格式。")
+                return
+            if parsed.get("error"):
+                await update.effective_message.reply_text(f"提醒解析失败：{parsed['error']}")
+                return
+            remind_at_text = parsed.get("remind_at", "")
+            target_dt = self.parse_remind_at(remind_at_text)
+            if target_dt is None:
+                await update.effective_message.reply_text(f"时间格式无法识别：{remind_at_text}")
+                return
+            if target_dt <= now_dt:
+                await update.effective_message.reply_text(
+                    f"提醒时间需要晚于当前时间（当前 {now_text} {self.timezone_name}）。"
+                )
+                return
+            reminder_text = parsed.get("reminder_text", "").strip() or self.DEFAULT_REMINDER_TEXT
+            reminder_id = uuid.uuid4().hex[:12]
+            user = update.effective_message.from_user
+            reminder = {
+                "id": reminder_id,
+                "chat_id": str(update.effective_message.chat.id),
+                "user_name": user.full_name or "",
+                "user_username": user.username or "",
+                "reminder_text": reminder_text,
+                "trigger_ts": target_dt.timestamp(),
+            }
+            self.reminders[reminder_id] = reminder
+            self.save_reminders()
+            self.schedule_single_reminder(reminder)
+            await update.effective_message.reply_text(
+                f"提醒已设置：{target_dt.strftime('%Y-%m-%d %H:%M')}（{self.timezone_name}）\n内容：{reminder_text}"
+            )
+        except Exception as e:
+            traceback.print_exc()
+            await update.effective_message.reply_text('Error:\n' + str(e))
+
     async def ping_command(self, update, context):
         user_id = str(update.effective_message.from_user.id)
         chat_id = str(update.effective_message.chat.id)
@@ -628,6 +827,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
         self.application.add_handler(CommandHandler('javdb', self.javdb_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
+        self.application.add_handler(CommandHandler('remind', self.remind_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))
         ai_chat_filters = (filters.TEXT | filters.PHOTO | filters.Document.IMAGE) & (~filters.COMMAND)
@@ -640,6 +840,7 @@ class TelegramBot:
         GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
         self.application.job_queue.run_repeating(self.job_wrapper, interval=3693, chat_id=GROUP_CHAT_ID, name='scheduled jandan')
         self.application.job_queue.run_repeating(self.get_alpha_news, interval=300, chat_id=GROUP_CHAT_ID, name='scheduled news')
+        self.restore_pending_reminders()
 
     def run(self):
         self.add_handlers()

@@ -70,6 +70,8 @@ EXA_DECISION_CONTEXT_MESSAGES = _parse_int_env("EXA_DECISION_CONTEXT_MESSAGES", 
 EXA_DECISION_TEXT_MAX_CHARS = _parse_int_env("EXA_DECISION_TEXT_MAX_CHARS", 320, min_value=100, max_value=1200)
 EXA_DECISION_CACHE_TTL_SECONDS = _parse_float_env("EXA_DECISION_CACHE_TTL_SECONDS", 600.0, min_value=30.0, max_value=86400.0)
 EXA_DECISION_CACHE_MAX_SIZE = _parse_int_env("EXA_DECISION_CACHE_MAX_SIZE", 256, min_value=32, max_value=2048)
+REMINDER_PARSE_MODEL = os.getenv("REMINDER_PARSE_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+REMINDER_PARSE_MAX_OUTPUT_TOKENS = _parse_int_env("REMINDER_PARSE_MAX_OUTPUT_TOKENS", 120, min_value=64, max_value=256)
 
 _EXA_DECISION_CACHE = OrderedDict()
 _EXA_DECISION_CACHE_LOCK = threading.Lock()
@@ -282,6 +284,78 @@ def _extract_response_output_text(response_obj):
         if parts:
             return "".join(parts).strip()
     return ""
+
+
+def _parse_json_object(raw_text):
+    if not raw_text:
+        return None
+    candidate = raw_text.strip()
+    if candidate.startswith("```"):
+        candidate = re.sub(r"^```(?:json)?\s*", "", candidate, flags=re.IGNORECASE)
+        candidate = re.sub(r"\s*```$", "", candidate)
+    try:
+        parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    json_match = re.search(r"\{.*\}", candidate, flags=re.DOTALL)
+    if not json_match:
+        return None
+    try:
+        parsed = json.loads(json_match.group(0))
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def parse_reminder_request(text, now_text, timezone_name):
+    instructions = (
+        "你是提醒解析器，只输出 JSON。"
+        "JSON 字段固定："
+        '{"is_reminder": boolean, "remind_at": "YYYY-MM-DD HH:MM", "reminder_text": string, "error": string}。'
+        "规则："
+        "1) 用户明确表达提醒意图（提醒/闹钟/叫我）时 is_reminder=true；"
+        "2) 若用户只说“8点”这类未指明时段的时间，按最近未来时间解释："
+        "当前09:00时“8点”=今天20:00，当前07:00时“8点”=今天08:00；"
+        "3) 若用户说了早上/下午/晚上等明确时段，优先按时段解释；"
+        "4) remind_at 必须是未来时间，按给定当前时间与时区推断；"
+        "5) 时间无法确定时，is_reminder=true 且 error 写明原因；"
+        "6) 不是提醒请求时，is_reminder=false，其余字段用空字符串。"
+    )
+    prompt = (
+        f"当前时间: {now_text}\n"
+        f"时区: {timezone_name}\n"
+        f"用户原话: {text}\n"
+        "请返回 JSON。"
+    )
+    response = client.responses.create(
+        model=REMINDER_PARSE_MODEL,
+        input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+        instructions=instructions,
+        max_output_tokens=REMINDER_PARSE_MAX_OUTPUT_TOKENS,
+    )
+    raw_text = _extract_response_output_text(response)
+    parsed = _parse_json_object(raw_text)
+    if not parsed:
+        return {
+            "is_reminder": False,
+            "remind_at": "",
+            "reminder_text": "",
+            "error": "提醒解析失败（模型未返回合法 JSON）",
+        }
+    is_reminder = bool(parsed.get("is_reminder", False))
+    remind_at = str(parsed.get("remind_at", "")).strip()
+    reminder_text = str(parsed.get("reminder_text", "")).strip()
+    error = str(parsed.get("error", "")).strip()
+    if is_reminder and (not reminder_text):
+        reminder_text = "到时间了"
+    return {
+        "is_reminder": is_reminder,
+        "remind_at": remind_at,
+        "reminder_text": reminder_text,
+        "error": error,
+    }
 
 
 def _parse_need_search(raw_text):
