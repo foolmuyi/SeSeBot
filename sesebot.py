@@ -151,6 +151,7 @@ class TelegramBot:
         for existing_job in self.application.job_queue.get_jobs_by_name(job_name):
             existing_job.schedule_removal()
         delay_seconds = max(1.0, float(reminder["trigger_ts"]) - time.time())
+        logger.info("Reminder scheduled")
         self.application.job_queue.run_once(
             self.send_reminder,
             when=delay_seconds,
@@ -205,6 +206,7 @@ class TelegramBot:
                 data={"id": reminder_id},
             )
             return
+        logger.info("Reminder delivered")
         self.reminders.pop(reminder_id, None)
         self.save_reminders()
 
@@ -243,6 +245,7 @@ class TelegramBot:
     async def get_pixiv_imgs(self, update, mode):
         await update.effective_message.reply_text('我知道你很急，但你先别急！')
         try:
+            logger.info("Pixiv task started")
             chat_id = str(update.effective_message.chat.id)
             filtered_bucket = self.get_filtered_bucket(chat_id)
             msg = await asyncio.to_thread(get_pixiv_ranking, mode, filtered_bucket, 2)
@@ -254,18 +257,21 @@ class TelegramBot:
                 filename = img_url.split("/")[-1]
                 await self.send_image_media(chat_id=chat_id, media_bytes=img, filename=filename)
             await update.effective_message.reply_text(artworks_url)
+            logger.info("Pixiv task finished")
         except Exception as e:
             logger.exception("get_pixiv_imgs failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     async def get_jandan_imgs(self, update, context):
         if update:
+            logger.info("Jandan task started by command")
             chat_id = str(update.effective_message.chat.id)
             await update.effective_message.reply_text('你可少看点儿沙雕图吧！')
         else:
             if not self.check_working_time():
                 return
             else:
+                logger.info("Jandan task started by scheduler")
                 chat_id = str(context.job.chat_id)
                 await self.application.bot.send_message(chat_id=chat_id, text='沙雕图来咯')
         has_comment = False
@@ -294,9 +300,11 @@ class TelegramBot:
                 except Exception as e:
                     logger.exception("get_jandan_imgs hot_sub_comments failed")
                     await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
+        logger.info("Jandan task finished")
 
     async def get_javdb_cover(self, update):
         try:
+            logger.info("JavDB cover task started")
             chat_id = str(update.effective_message.chat.id)
             filtered_bucket = self.get_filtered_bucket(chat_id)
             msg = await asyncio.to_thread(get_javdb_ranking, filtered_bucket)
@@ -322,12 +330,14 @@ class TelegramBot:
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.effective_message.reply_text(movie_info_msg, reply_markup=reply_markup)
+            logger.info("JavDB cover task finished")
         except Exception as e:
             logger.exception("get_javdb_cover failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     async def get_javdb_details(self, update, href):
         try:
+            logger.info("JavDB detail task started")
             chat_id = str(update.effective_message.chat.id)
             await self.application.bot.send_message(chat_id=chat_id, text='我知道你很急，但你先别急...')
             image_urls = await asyncio.to_thread(get_javdb_preview, href)
@@ -336,6 +346,7 @@ class TelegramBot:
                 filename = image_url.split("/")[-1]
                 await self.send_image_media(chat_id=chat_id, media_bytes=preview_image, filename=filename)
                 await asyncio.sleep(1.5)
+            logger.info("JavDB detail task finished")
         except Exception as e:
             logger.exception("get_javdb_details failed")
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
@@ -352,6 +363,7 @@ class TelegramBot:
         if alpha_news['msg']:
             chat_id = str(context.job.chat_id)
             await self.application.bot.send_message(chat_id=chat_id, text=alpha_news['msg'])
+            logger.info("Alpha news delivered")
         else:
             logger.debug("No alpha news found.")
 
@@ -638,6 +650,7 @@ class TelegramBot:
 
     @check_access
     async def start_command(self, update, context):
+        logger.info("Command /start triggered")
         chat_id = str(update.message.chat.id)
         if (chat_id not in self.filtered.keys()) and (chat_id not in self.aichat_contexts.keys()):
             await update.message.reply_text("欢迎使用")
@@ -648,6 +661,7 @@ class TelegramBot:
 
     @check_access
     async def pixiv_command(self, update, context):
+        logger.info("Command /pixiv triggered")
         try:
             await self.get_pixiv_imgs(update, 'daily_r18')
         except Exception as e:
@@ -656,6 +670,7 @@ class TelegramBot:
 
     @check_access
     async def javdb_command(self, update, context):
+        logger.info("Command /javdb triggered")
         try:
             await self.get_javdb_cover(update)
         except Exception as e:
@@ -664,6 +679,7 @@ class TelegramBot:
 
     @check_access
     async def jandan_command(self, update, context):
+        logger.info("Command /jandan triggered")
         try:
             await self.get_jandan_imgs(update, context)
         except Exception as e:
@@ -672,6 +688,7 @@ class TelegramBot:
 
     @check_access
     async def remind_command(self, update, context):
+        logger.info("Command /remind triggered")
         status_reply = None
         try:
             status_reply = await update.effective_message.reply_text("正在设置提醒，请稍候...")
@@ -729,6 +746,7 @@ class TelegramBot:
             self.reminders[reminder_id] = reminder
             self.save_reminders()
             self.schedule_single_reminder(reminder)
+            logger.info("Reminder created")
             await finish_status(
                 f"提醒已设置：{target_dt.strftime('%Y-%m-%d %H:%M')}（{self.timezone_name}）\n内容：{reminder_text}"
             )
@@ -737,6 +755,7 @@ class TelegramBot:
             await finish_status('Error:\n' + str(e))
 
     async def ping_command(self, update, context):
+        logger.info("Command /ping triggered")
         user_id = str(update.effective_message.from_user.id)
         chat_id = str(update.effective_message.chat.id)
         await update.message.reply_text(f"Pong! 你的userid是{user_id}，当前chatid是{chat_id}")
@@ -852,7 +871,14 @@ class TelegramBot:
 
     def set_scheduler(self):
         GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
-        self.application.job_queue.run_repeating(self.job_wrapper, interval=3693, chat_id=GROUP_CHAT_ID, name='scheduled jandan')
+        logger.info("Scheduler initialized")
+        self.application.job_queue.run_repeating(
+            self.job_wrapper,
+            interval=3000,
+            chat_id=GROUP_CHAT_ID,
+            name='scheduled jandan',
+            job_kwargs={"jitter": 1000},
+        )
         self.application.job_queue.run_repeating(self.get_alpha_news, interval=300, chat_id=GROUP_CHAT_ID, name='scheduled news')
         self.restore_pending_reminders()
 
@@ -870,7 +896,13 @@ if __name__ == '__main__':
         level=logging.ERROR,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
-    logger.setLevel(log_level)
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    project_loggers = {"__main__"}
+    for filename in os.listdir(project_dir):
+        if filename.endswith(".py") and filename != "__init__.py":
+            project_loggers.add(filename[:-3])
+    for logger_name in project_loggers:
+        logging.getLogger(logger_name).setLevel(log_level)
     token = os.getenv('BOT_TOKEN')
     bot = TelegramBot(token)
     bot.run()
