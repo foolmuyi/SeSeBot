@@ -365,7 +365,7 @@ class TelegramBot:
             await self.application.bot.send_message(chat_id=chat_id, text=alpha_news['msg'])
             logger.info("Alpha news delivered")
         else:
-            logger.debug("No alpha news found.")
+            logger.info("No alpha news found.")
 
     @staticmethod
     def is_message_not_modified_error(exc):
@@ -811,7 +811,7 @@ class TelegramBot:
             llm_messages = self.aichat_contexts[chat_id] + [{"role": "user", "content": user_content}]
             self.aichat_contexts[chat_id].append({"role": "user", "content": user_context_text})
 
-            logger.debug("Waiting for LLM response...")
+            logger.info("Waiting for LLM response...")
             full_text = ''    # 整个回答完整文本
             current_message = ''    # 最新一条消息
             buffer_text = ''    # 单次消息更新
@@ -842,7 +842,7 @@ class TelegramBot:
             await self.edit_reply(fast_reply, reply_text[:4096])
             self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
             self.trim_aichat_context(chat_id)
-            logger.debug("Reply sent successfully")
+            logger.info("Reply sent successfully")
         except Exception as e:
             logger.exception("handle_message failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
