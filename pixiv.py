@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import logging
 import requests
 from dotenv import load_dotenv
 from http_utils import fetch_json, fetch_response
@@ -14,6 +15,7 @@ CF_PIXIV_KEY = os.getenv('CF_PIXIV_KEY')
 headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
            'Cookie': str(COOKIE)}
 timeout = (3, 30)
+logger = logging.getLogger(__name__)
 
 
 def require_pixiv_proxy_config():
@@ -21,7 +23,7 @@ def require_pixiv_proxy_config():
         raise ValueError('Missing CF_PIXIV_URL or CF_PIXIV_KEY')
 
 def download_pixiv_img(url, referer):
-    print('downloading....')
+    logger.info("Downloading Pixiv image...")
     require_pixiv_proxy_config()
     headers_download = headers.copy()
     headers_download["referer"] = str(referer)
@@ -67,6 +69,8 @@ def get_pixiv_ranking(mode, filtered, pages=2):
                 pass
 
     msg = {}
+    if not image_list:
+        raise ValueError("Failed to fetch Pixiv ranking: no new artworks found")
     rand_art = random.choice(range(len(image_list)))
     artworks = image_list[rand_art]
     msg['artworks_url'] = artworks['referer']

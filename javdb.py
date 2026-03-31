@@ -1,6 +1,7 @@
 import os
 import re
 import random
+import logging
 from curl_cffi import requests
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup, Tag
@@ -8,9 +9,10 @@ from http_utils import fetch_response
 
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 def download_javdb_img(url):
-    print('javdb image downloading....')
+    logger.info("Downloading JavDB image...")
     name = url.split("/")[-1]
     response = fetch_response(
         requests.get,

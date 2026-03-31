@@ -18,6 +18,7 @@ pip3 install -r requirements.txt
   -  `BOT_TOKEN`: your Telegram bot token
   -  `GROUP_CHAT_ID`: the `chat_id` of your Telegram group
   -  `BOT_TIMEZONE` (optional): timezone for reminders, default `Asia/Shanghai`
+  -  `LOG_LEVEL` (optional): logging level, default `INFO`
   -  `PIXIV_COOKIE`: your Pixiv cookie
   -  `CF_PIXIV_URL`: your Pixiv Cloudflare worker url
   -  `CF_PIXIV_KEY`: your Pixiv Cloudflare worker authentication key

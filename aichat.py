@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+import logging
 from collections import OrderedDict
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -20,6 +21,7 @@ EXA_SEARCH_ENDPOINT = os.getenv("EXA_SEARCH_ENDPOINT", "https://api.exa.ai/searc
 # 预留给 Responses API 的 tools，后续可直接填入 web_search/function 等定义。
 RESPONSE_TOOLS = []
 RESPONSE_TOOL_CHOICE = None
+logger = logging.getLogger(__name__)
 
 
 def _parse_bool_env(name, default):
@@ -546,7 +548,7 @@ def _augment_messages_with_exa(messages):
     try:
         need_search = _should_use_exa_by_model(messages, query)
     except Exception as exc:
-        print(f"[Exa] 搜索判定失败，回退到模型直答: {exc}")
+        logger.warning("[Exa] 搜索判定失败，回退到模型直答: %s", exc)
         return messages
     if not need_search:
         return messages
@@ -554,7 +556,7 @@ def _augment_messages_with_exa(messages):
     try:
         results = _search_exa(query)
     except Exception as exc:
-        print(f"[Exa] 搜索失败，回退到模型直答: {exc}")
+        logger.warning("[Exa] 搜索失败，回退到模型直答: %s", exc)
         return messages
 
     if not results:
@@ -570,7 +572,7 @@ def get_ai_response(user_message):
     try:
         augmented_messages = _augment_messages_with_exa(user_message)
     except Exception as exc:
-        print(f"[Exa] 上下文构建失败，回退到模型直答: {exc}")
+        logger.warning("[Exa] 上下文构建失败，回退到模型直答: %s", exc)
         augmented_messages = user_message
     has_image = _message_has_image(augmented_messages)
     if not has_image:

@@ -1,5 +1,6 @@
 import requests
 import random
+import logging
 from bs4 import BeautifulSoup
 from http_utils import fetch_json, fetch_response
 
@@ -7,6 +8,7 @@ from http_utils import fetch_json, fetch_response
 base_url = 'https://jandan.net'
 headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'}
 timeout = (3, 30)
+logger = logging.getLogger(__name__)
 
 def get_top_comments(filtered):
     all_comments = {}
@@ -39,7 +41,7 @@ def get_top_comments(filtered):
         raise ValueError('真的一张都没有了！')
 
 def get_comment_img(img_url):
-    print('Downloading jandan images...')
+    logger.info("Downloading jandan image...")
     response = fetch_response(
         requests.get,
         url=img_url,
@@ -52,7 +54,7 @@ def get_comment_img(img_url):
 
 def get_hot_sub_comments(comment_id):
     hot_sub_comments = ''
-    print('Getting sub comments...')
+    logger.info("Getting sub comments...")
     sub_comments_url = base_url + f'/api/tucao/list/{comment_id}'
     sub_comments_data = fetch_json(
         requests.get,

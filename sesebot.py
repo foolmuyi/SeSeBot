@@ -4,8 +4,8 @@ import io
 import base64
 import json
 import time
-import traceback
 import uuid
+import logging
 from collections import deque
 from datetime import datetime
 from pixiv import download_pixiv_img, get_pixiv_ranking
@@ -19,6 +19,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TimedOut, BadRequest, RetryAfter
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, CallbackQueryHandler
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramBot:
@@ -80,7 +82,7 @@ class TelegramBot:
             with open(self.reminder_store_path, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
         except Exception:
-            traceback.print_exc()
+            logger.exception("Failed to load reminder store: %s", self.reminder_store_path)
             return {}
         if isinstance(raw_data, list):
             reminder_items = raw_data
@@ -121,7 +123,7 @@ class TelegramBot:
                 json.dump(reminders_data, f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, self.reminder_store_path)
         except Exception:
-            traceback.print_exc()
+            logger.exception("Failed to save reminder store: %s", self.reminder_store_path)
 
     def parse_remind_at(self, remind_at_text):
         text = (remind_at_text or "").strip()
@@ -175,7 +177,7 @@ class TelegramBot:
         if stale_ids:
             self.save_reminders()
         if restored_count:
-            print(f"Restored {restored_count} reminder(s).")
+            logger.info("Restored %s reminder(s).", restored_count)
 
     async def send_reminder(self, context):
         if not context.job or not context.job.data:
@@ -194,7 +196,7 @@ class TelegramBot:
         try:
             await context.bot.send_message(chat_id=reminder["chat_id"], text=reminder_msg)
         except Exception:
-            traceback.print_exc()
+            logger.exception("Failed to send reminder message: %s", reminder_id)
             self.application.job_queue.run_once(
                 self.send_reminder,
                 when=60,
@@ -253,7 +255,7 @@ class TelegramBot:
                 await self.send_image_media(chat_id=chat_id, media_bytes=img, filename=filename)
             await update.effective_message.reply_text(artworks_url)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("get_pixiv_imgs failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     async def get_jandan_imgs(self, update, context):
@@ -279,9 +281,9 @@ class TelegramBot:
                 is_gif = img_url.lower().endswith('.gif')
                 await self.send_image_media(chat_id=chat_id, media_bytes=img, filename=filename, as_animation=is_gif)
         except TimedOut:  # Telegram自身Bug：发送成功后仍有可能收到TimeOut异常
-            traceback.print_exc()
+            logger.warning("get_jandan_imgs got TimedOut after send", exc_info=True)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("get_jandan_imgs failed")
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
         finally:
             if has_comment == True:  # 至少要成功获取到图片链接才能尝试获取评论
@@ -290,7 +292,7 @@ class TelegramBot:
                     text2send = hot_sub_comments + '\n' + comment['comment_url']
                     await self.application.bot.send_message(chat_id=chat_id, text=text2send)
                 except Exception as e:
-                    traceback.print_exc()
+                    logger.exception("get_jandan_imgs hot_sub_comments failed")
                     await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
 
     async def get_javdb_cover(self, update):
@@ -321,7 +323,7 @@ class TelegramBot:
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.effective_message.reply_text(movie_info_msg, reply_markup=reply_markup)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("get_javdb_cover failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     async def get_javdb_details(self, update, href):
@@ -335,7 +337,7 @@ class TelegramBot:
                 await self.send_image_media(chat_id=chat_id, media_bytes=preview_image, filename=filename)
                 await asyncio.sleep(1.5)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("get_javdb_details failed")
             await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
 
     async def get_alpha_news(self, context):
@@ -345,13 +347,13 @@ class TelegramBot:
             alpha_news = await asyncio.to_thread(check_alpha, context.bot_data['last_news_ts'])
             context.bot_data['last_news_ts'] = alpha_news['ts']
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("get_alpha_news failed")
             return
         if alpha_news['msg']:
             chat_id = str(context.job.chat_id)
             await self.application.bot.send_message(chat_id=chat_id, text=alpha_news['msg'])
         else:
-            print("No alpha news found.")
+            logger.debug("No alpha news found.")
 
     @staticmethod
     def is_message_not_modified_error(exc):
@@ -386,7 +388,7 @@ class TelegramBot:
         except BadRequest as exc:
             if self.is_message_not_modified_error(exc):
                 return
-            traceback.print_exc()
+            logger.warning("edit_reply BadRequest", exc_info=True)
         except RetryAfter as exc:
             await asyncio.sleep(float(exc.retry_after) + 0.2)
             try:
@@ -394,15 +396,15 @@ class TelegramBot:
             except BadRequest as retry_exc:
                 if self.is_message_not_modified_error(retry_exc):
                     return
-                traceback.print_exc()
+                logger.warning("edit_reply retry BadRequest", exc_info=True)
             except TimedOut:
                 return
             except Exception:
-                traceback.print_exc()
+                logger.exception("edit_reply retry unexpected error")
         except TimedOut:
             return
         except Exception:
-            traceback.print_exc()
+            logger.exception("edit_reply unexpected error")
 
     @staticmethod
     def _is_escaped(text, index):
@@ -649,7 +651,7 @@ class TelegramBot:
         try:
             await self.get_pixiv_imgs(update, 'daily_r18')
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("pixiv_command failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     @check_access
@@ -657,7 +659,7 @@ class TelegramBot:
         try:
             await self.get_javdb_cover(update)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("javdb_command failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     @check_access
@@ -665,14 +667,26 @@ class TelegramBot:
         try:
             await self.get_jandan_imgs(update, context)
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("jandan_command failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     @check_access
     async def remind_command(self, update, context):
+        status_reply = None
+        try:
+            status_reply = await update.effective_message.reply_text("正在设置提醒，请稍候...")
+        except Exception:
+            pass
+
+        async def finish_status(text):
+            if status_reply:
+                await self.edit_reply(status_reply, text)
+            else:
+                await update.effective_message.reply_text(text)
+
         remind_input = " ".join(context.args).strip()
         if not remind_input:
-            await update.effective_message.reply_text(
+            await finish_status(
                 "用法：/remind <自然语言提醒>\n例如：/remind 明天早上8点提醒我开会"
             )
             return
@@ -686,18 +700,18 @@ class TelegramBot:
                 self.timezone_name,
             )
             if not parsed.get("is_reminder"):
-                await update.effective_message.reply_text("没有识别到提醒意图，请用“几点几分提醒我做什么”的格式。")
+                await finish_status("没有识别到提醒意图，请用“几点几分提醒我做什么”的格式。")
                 return
             if parsed.get("error"):
-                await update.effective_message.reply_text(f"提醒解析失败：{parsed['error']}")
+                await finish_status(f"提醒解析失败：{parsed['error']}")
                 return
             remind_at_text = parsed.get("remind_at", "")
             target_dt = self.parse_remind_at(remind_at_text)
             if target_dt is None:
-                await update.effective_message.reply_text(f"时间格式无法识别：{remind_at_text}")
+                await finish_status(f"时间格式无法识别：{remind_at_text}")
                 return
             if target_dt <= now_dt:
-                await update.effective_message.reply_text(
+                await finish_status(
                     f"提醒时间需要晚于当前时间（当前 {now_text} {self.timezone_name}）。"
                 )
                 return
@@ -715,12 +729,12 @@ class TelegramBot:
             self.reminders[reminder_id] = reminder
             self.save_reminders()
             self.schedule_single_reminder(reminder)
-            await update.effective_message.reply_text(
+            await finish_status(
                 f"提醒已设置：{target_dt.strftime('%Y-%m-%d %H:%M')}（{self.timezone_name}）\n内容：{reminder_text}"
             )
         except Exception as e:
-            traceback.print_exc()
-            await update.effective_message.reply_text('Error:\n' + str(e))
+            logger.exception("remind_command failed")
+            await finish_status('Error:\n' + str(e))
 
     async def ping_command(self, update, context):
         user_id = str(update.effective_message.from_user.id)
@@ -778,7 +792,7 @@ class TelegramBot:
             llm_messages = self.aichat_contexts[chat_id] + [{"role": "user", "content": user_content}]
             self.aichat_contexts[chat_id].append({"role": "user", "content": user_context_text})
 
-            print('Waiting for LLM response...')
+            logger.debug("Waiting for LLM response...")
             full_text = ''    # 整个回答完整文本
             current_message = ''    # 最新一条消息
             buffer_text = ''    # 单次消息更新
@@ -809,9 +823,9 @@ class TelegramBot:
             await self.edit_reply(fast_reply, reply_text[:4096])
             self.aichat_contexts[chat_id].append({"role": "assistant", "content": full_text})
             self.trim_aichat_context(chat_id)
-            print('Reply sent successfully')
+            logger.debug("Reply sent successfully")
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("handle_message failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
         finally:
             if typing_stop_event:
@@ -845,11 +859,17 @@ class TelegramBot:
     def run(self):
         self.add_handlers()
         self.set_scheduler()
-        print("Bot is running...")
+        logger.info("Bot is running...")
         self.application.run_polling()
 
 if __name__ == '__main__':
     load_dotenv()
+    log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
     token = os.getenv('BOT_TOKEN')
     bot = TelegramBot(token)
     bot.run()
