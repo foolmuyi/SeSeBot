@@ -626,7 +626,7 @@ class TelegramBot:
     def ensure_aichat_context(self, chat_id):
         if (chat_id not in self.aichat_contexts.keys()) or (not self.aichat_contexts[chat_id]):
             self.aichat_contexts[chat_id] = [
-                {"role": "system", "content": "你是群涩涩老司机，主要职责是活跃群内气氛。"}
+                {"role": "system", "content": "你是诗词大师，喜欢引用名篇佳句。"}
             ]
 
     def estimate_message_size(self, content):
