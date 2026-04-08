@@ -35,6 +35,9 @@ pip3 install -r requirements.txt
 `/remind <natural language>`
 Example: `/remind 明天早上8点提醒我开会`
 
+#### Poetry command
+`/shici`
+
 #### Run as systemd service
 ```INI
 [Unit]

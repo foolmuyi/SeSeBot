@@ -12,6 +12,7 @@ from pixiv import download_pixiv_img, get_pixiv_ranking
 from aichat import stream_ai_response, parse_reminder_request
 from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
 from javdb import get_javdb_ranking, download_javdb_img, get_javdb_reviews, get_javdb_preview
+from shici import get_shici_card
 from bnalpha import check_alpha
 from dotenv import load_dotenv
 from PIL import Image
@@ -301,6 +302,66 @@ class TelegramBot:
                     logger.exception("get_jandan_imgs hot_sub_comments failed")
                     await self.application.bot.send_message(chat_id=chat_id, text=('Error:\n' + str(e)))
         logger.info("Jandan task finished")
+
+    async def get_shici_image(self, update=None, context=None):
+        chat_id = None
+        try:
+            logger.info("Shici task started")
+            if update:
+                chat_id = str(update.effective_message.chat.id)
+            elif context and context.job:
+                chat_id = str(context.job.chat_id)
+            else:
+                raise ValueError("Missing chat context for shici task")
+            filtered_bucket = self.get_filtered_bucket(chat_id)
+            shici_card = await asyncio.to_thread(get_shici_card, filtered_bucket)
+            filtered_bucket.append(shici_card["quote_id"])
+            await self.send_image_media(
+                chat_id=chat_id,
+                media_bytes=shici_card["image_bytes"],
+                filename=shici_card["filename"],
+            )
+            full_text = str(shici_card.get("full_text", "")).strip()
+            full_text_url = str(shici_card.get("full_text_url", "")).strip()
+            if not full_text_url:
+                full_text_url = str(shici_card.get("source_url", "")).strip()
+
+            if full_text_url:
+                link_line = f"原文链接：{full_text_url}"
+            else:
+                link_line = ""
+
+            if full_text:
+                text_to_send = full_text
+            else:
+                text_to_send = "（原文为空）"
+
+            if link_line:
+                composed_text = f"{text_to_send}\n\n{link_line}"
+            else:
+                composed_text = text_to_send
+
+            max_message_len = 4096
+            if len(composed_text) > max_message_len:
+                if not link_line:
+                    composed_text = text_to_send[: max_message_len - 1].rstrip() + "…"
+                else:
+                    reserved = len("\n\n") + len(link_line)
+                    available_text_len = max_message_len - reserved
+                    if available_text_len <= 1:
+                        composed_text = link_line[:max_message_len]
+                    else:
+                        truncated_text = text_to_send[: available_text_len - 1].rstrip() + "…"
+                        composed_text = f"{truncated_text}\n\n{link_line}"
+
+            await self.application.bot.send_message(chat_id=chat_id, text=composed_text)
+            logger.info("Shici task finished")
+        except Exception as e:
+            logger.exception("get_shici_image failed")
+            if update:
+                await update.effective_message.reply_text("Error:\n" + str(e))
+            elif chat_id:
+                await self.application.bot.send_message(chat_id=chat_id, text="Error:\n" + str(e))
 
     async def get_javdb_cover(self, update):
         try:
@@ -687,6 +748,15 @@ class TelegramBot:
             await update.effective_message.reply_text('Error:\n' + str(e))
 
     @check_access
+    async def shici_command(self, update, context):
+        logger.info("Command /shici triggered")
+        try:
+            await self.get_shici_image(update)
+        except Exception as e:
+            logger.exception("shici_command failed")
+            await update.effective_message.reply_text("Error:\n" + str(e))
+
+    @check_access
     async def remind_command(self, update, context):
         logger.info("Command /remind triggered")
         status_reply = None
@@ -860,6 +930,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
         self.application.add_handler(CommandHandler('javdb', self.javdb_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
+        self.application.add_handler(CommandHandler('shici', self.shici_command))
         self.application.add_handler(CommandHandler('remind', self.remind_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))
@@ -867,17 +938,17 @@ class TelegramBot:
         self.application.add_handler(MessageHandler(ai_chat_filters, self.handle_message))
 
     async def job_wrapper(self, context):
-        await self.get_jandan_imgs(update=None, context=context)
+        await self.get_shici_image(update=None, context=context)
 
     def set_scheduler(self):
         GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
         logger.info("Scheduler initialized")
         self.application.job_queue.run_repeating(
             self.job_wrapper,
-            interval=3000,
+            interval=65536,
             chat_id=GROUP_CHAT_ID,
-            name='scheduled jandan',
-            job_kwargs={"jitter": 1000},
+            name='scheduled shici',
+            job_kwargs={"jitter": 16384},
         )
         self.application.job_queue.run_repeating(self.get_alpha_news, interval=300, chat_id=GROUP_CHAT_ID, name='scheduled news')
         self.restore_pending_reminders()
