@@ -55,3 +55,9 @@ RestartSec=30
 [Install]
 WantedBy=multi-user.target
 ```
+
+#### Prevent unattended upgrades from restarting this service (Ubuntu)
+Replace `sesebot.service` if your unit name is different.
+```Shell
+echo '$nrconf{override_rc}{qr(^sesebot\.service$)} = 0;' | sudo tee /etc/needrestart/conf.d/99-sesebot.conf
+```

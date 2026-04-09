@@ -626,7 +626,17 @@ class TelegramBot:
     def ensure_aichat_context(self, chat_id):
         if (chat_id not in self.aichat_contexts.keys()) or (not self.aichat_contexts[chat_id]):
             self.aichat_contexts[chat_id] = [
-                {"role": "system", "content": "你是诗词大师，喜欢引用名篇佳句。"}
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一个在 Telegram 中与用户对话的 AI 助手。"
+                        "默认使用简体中文，回答准确、简洁、可执行；先给结论，再补充必要细节。"
+                        "不确定时要明确说明，不要编造事实。"
+                        "当消息包含图片时，结合图片与文字一起回答。"
+                        "除非用户明确要求，不要长篇输出，不要跑题。"
+                        "尽量使用简单 Markdown，避免复杂或未闭合格式。"
+                    ),
+                }
             ]
 
     def estimate_message_size(self, content):
