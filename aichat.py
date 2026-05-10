@@ -16,17 +16,17 @@ load_dotenv()
 API_KEY = os.getenv('GROK_API_KEY')
 client = OpenAI(api_key=API_KEY, base_url="https://api.x.ai/v1")
 # 纯文本对话模型（默认聊天）
-DEFAULT_MODEL = "grok-4-1-fast-reasoning"
+DEFAULT_MODEL = "grok-4.3"
 # 图生文模型：输入图片（可附文字）并输出文本理解结果。
-IMAGE_UNDERSTANDING_MODEL = "grok-4.20-0309-reasoning"
+IMAGE_UNDERSTANDING_MODEL = "grok-4.3"
 # 图片生成模型：支持纯文本生成，也可使用参考图进行编辑；留空表示关闭此能力。
 IMAGE_GENERATION_MODEL = ""
 IMAGE_GENERATION_SIZE = "1024x1024"
 IMAGE_GENERATION_QUALITY = ""
 IMAGE_GENERATION_STYLE = ""
 IMAGE_GENERATION_RESPONSE_FORMAT = ""  # 可选: "", "b64_json", "url"
-IMAGE_GENERATION_TIMEOUT_SECONDS = 90.0
-IMAGE_GENERATION_DOWNLOAD_TIMEOUT_SECONDS = 20.0
+IMAGE_GENERATION_TIMEOUT_SECONDS = 120.0
+IMAGE_GENERATION_DOWNLOAD_TIMEOUT_SECONDS = 30.0
 IMAGE_GENERATION_MAX_INPUT_IMAGES = 5
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_SEARCH_ENDPOINT = os.getenv("EXA_SEARCH_ENDPOINT", "https://api.exa.ai/search").strip()
