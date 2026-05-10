@@ -9,7 +9,12 @@ import logging
 from collections import deque
 from datetime import datetime
 from pixiv import download_pixiv_img, get_pixiv_ranking
-from aichat import stream_ai_response, parse_reminder_request
+from aichat import (
+    ImageGenerationNotConfiguredError,
+    generate_image,
+    parse_reminder_request,
+    stream_ai_response,
+)
 from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
 from javdb import get_javdb_ranking, download_javdb_img, get_javdb_reviews, get_javdb_preview
 from shici import get_shici_card
@@ -953,6 +958,89 @@ class TelegramBot:
             await update.effective_message.reply_text("Error:\n" + str(e))
 
     @check_access
+    async def draw_command(self, update, context):
+        logger.info("Command /draw triggered")
+        incoming_message = update.effective_message
+        prompt = " ".join(context.args).strip()
+        if not prompt:
+            await incoming_message.reply_text(
+                "用法：/draw <提示词>\n"
+                "示例1：/draw 傍晚海边的赛博朋克城市，电影感构图\n"
+                "示例2：回复一张图片并发送 /draw 改成水彩插画风格"
+            )
+            return
+
+        status_reply = None
+        try:
+            status_reply = await incoming_message.reply_text("正在生成图片，请稍候...")
+        except Exception:
+            pass
+
+        async def finish_status(text):
+            if status_reply:
+                await self.edit_reply(status_reply, text)
+            else:
+                await incoming_message.reply_text(text)
+
+        input_image_urls = []
+        seen_images = set()
+        for candidate_message in (incoming_message, incoming_message.reply_to_message):
+            try:
+                image_data_url = await self._extract_image_data_url(candidate_message)
+            except ValueError as exc:
+                await finish_status(f"参考图无效：{exc}")
+                return
+            if image_data_url and image_data_url not in seen_images:
+                seen_images.add(image_data_url)
+                input_image_urls.append(image_data_url)
+
+        try:
+            result = await asyncio.to_thread(
+                generate_image,
+                prompt,
+                input_image_urls,
+            )
+            await self.send_image_media(
+                chat_id=str(incoming_message.chat.id),
+                media_bytes=result["image_bytes"],
+                filename=result.get("filename"),
+            )
+            revised_prompt = str(result.get("revised_prompt", "")).strip()
+            input_count = int(result.get("input_image_count", 0) or 0)
+            if input_count > 0:
+                message_lines = [f"已完成图片生成（模型：{result.get('model', 'unknown')}，参考图：{input_count}张）"]
+            else:
+                message_lines = [f"已完成图片生成（模型：{result.get('model', 'unknown')}）"]
+            if revised_prompt and revised_prompt != prompt:
+                if len(revised_prompt) > 240:
+                    revised_prompt = revised_prompt[:239].rstrip() + "…"
+                message_lines.append(f"模型优化提示词：{revised_prompt}")
+            await finish_status("\n".join(message_lines))
+        except ImageGenerationNotConfiguredError as exc:
+            await finish_status(
+                "图片生成功能当前不可用。\n"
+                f"{exc}\n"
+                "请联系管理员检查模型与鉴权配置后重试。"
+            )
+        except ValueError as exc:
+            await finish_status(f"请求无效：{exc}")
+        except Exception as exc:
+            logger.exception("draw_command failed")
+            error_text = str(exc).strip()
+            if error_text:
+                if len(error_text) > 300:
+                    error_text = error_text[:299].rstrip() + "…"
+                if input_image_urls:
+                    await finish_status(f"图片生成失败：{error_text}\n当前模型可能不支持参考图输入，请改用纯文本生成或更换模型。")
+                else:
+                    await finish_status(f"图片生成失败：{error_text}")
+            else:
+                if input_image_urls:
+                    await finish_status("图片生成失败：请检查模型可用性和 API 权限。当前模型可能不支持参考图输入。")
+                else:
+                    await finish_status("图片生成失败：请检查模型可用性和 API 权限。")
+
+    @check_access
     async def remind_command(self, update, context):
         logger.info("Command /remind triggered")
         status_reply = None
@@ -1069,6 +1157,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('javdb', self.javdb_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('shici', self.shici_command))
+        self.application.add_handler(CommandHandler('draw', self.draw_command))
         self.application.add_handler(CommandHandler('remind', self.remind_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))

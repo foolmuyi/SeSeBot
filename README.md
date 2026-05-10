@@ -25,6 +25,10 @@ pip3 install -r requirements.txt
   -  `CF_BNALPHA_URL`: your bnalpha Cloudflare worker url
   -  `CF_BNALPHA_KEY`: your bnalpha Cloudflare worker authentication key
   -  LLM API key from Grok, OpenAI or any other provider
+- To enable image generation/editing, set these code-level constants:
+  - `IMAGE_UNDERSTANDING_MODEL` for image understanding (image -> text)
+  - `IMAGE_GENERATION_MODEL` for image generation/editing (text -> image, or image+text -> image; empty string means disabled)
+  - Optional: `IMAGE_GENERATION_SIZE`, `IMAGE_GENERATION_QUALITY`, `IMAGE_GENERATION_STYLE`, `IMAGE_GENERATION_RESPONSE_FORMAT`
 - Create `whitelist.json` and fill it with the Telegram `chat_id` of yourself and your friends.
 
 ## Usage
@@ -34,6 +38,12 @@ pip3 install -r requirements.txt
 #### Reminder command
 `/remind <natural language>`
 Example: `/remind 明天早上8点提醒我开会`
+
+#### Image generation command
+`/draw <prompt>`
+Examples:
+- `/draw 傍晚海边的赛博朋克城市，电影感构图`
+- reply to an image and send `/draw 改成水彩插画风格`
 
 #### Poetry command
 `/shici`

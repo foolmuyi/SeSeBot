@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import re
@@ -14,8 +15,19 @@ load_dotenv()
 
 API_KEY = os.getenv('GROK_API_KEY')
 client = OpenAI(api_key=API_KEY, base_url="https://api.x.ai/v1")
+# 纯文本对话模型（默认聊天）
 DEFAULT_MODEL = "grok-4-1-fast-reasoning"
-VISION_MODEL = "grok-4.20-0309-reasoning"
+# 图生文模型：输入图片（可附文字）并输出文本理解结果。
+IMAGE_UNDERSTANDING_MODEL = "grok-4.20-0309-reasoning"
+# 图片生成模型：支持纯文本生成，也可使用参考图进行编辑；留空表示关闭此能力。
+IMAGE_GENERATION_MODEL = ""
+IMAGE_GENERATION_SIZE = "1024x1024"
+IMAGE_GENERATION_QUALITY = ""
+IMAGE_GENERATION_STYLE = ""
+IMAGE_GENERATION_RESPONSE_FORMAT = ""  # 可选: "", "b64_json", "url"
+IMAGE_GENERATION_TIMEOUT_SECONDS = 90.0
+IMAGE_GENERATION_DOWNLOAD_TIMEOUT_SECONDS = 20.0
+IMAGE_GENERATION_MAX_INPUT_IMAGES = 5
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_SEARCH_ENDPOINT = os.getenv("EXA_SEARCH_ENDPOINT", "https://api.exa.ai/search").strip()
 # 预留给 Responses API 的 tools，后续可直接填入 web_search/function 等定义。
@@ -77,6 +89,10 @@ REMINDER_PARSE_MAX_OUTPUT_TOKENS = _parse_int_env("REMINDER_PARSE_MAX_OUTPUT_TOK
 
 _EXA_DECISION_CACHE = OrderedDict()
 _EXA_DECISION_CACHE_LOCK = threading.Lock()
+
+
+class ImageGenerationNotConfiguredError(RuntimeError):
+    pass
 
 
 def _message_has_image(messages):
@@ -256,6 +272,145 @@ def _set_cached_exa_decision(cache_key, value):
         _EXA_DECISION_CACHE.move_to_end(cache_key)
         while len(_EXA_DECISION_CACHE) > EXA_DECISION_CACHE_MAX_SIZE:
             _EXA_DECISION_CACHE.popitem(last=False)
+
+
+def _get_attr_or_key(data, key, default=None):
+    if isinstance(data, dict):
+        return data.get(key, default)
+    return getattr(data, key, default)
+
+
+def _decode_base64_image(base64_text):
+    if not isinstance(base64_text, str):
+        return None
+    compact_text = "".join(base64_text.split())
+    if not compact_text:
+        return None
+    try:
+        return base64.b64decode(compact_text, validate=False)
+    except Exception:
+        return None
+
+
+def _download_generated_image(image_url):
+    response = requests.get(image_url, timeout=IMAGE_GENERATION_DOWNLOAD_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.content
+
+
+def _guess_generated_image_ext(image_bytes):
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+        return "gif"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "webp"
+    return "png"
+
+
+def _normalize_image_urls(image_urls):
+    if image_urls is None:
+        return []
+    normalized_urls = []
+    seen = set()
+    for item in image_urls:
+        url = str(item or "").strip()
+        if (not url) or (url in seen):
+            continue
+        seen.add(url)
+        normalized_urls.append(url)
+        if len(normalized_urls) >= IMAGE_GENERATION_MAX_INPUT_IMAGES:
+            break
+    return normalized_urls
+
+
+def _build_image_generation_kwargs(prompt, image_urls=None, size=None, quality=None, style=None):
+    request_kwargs = {"model": IMAGE_GENERATION_MODEL, "prompt": prompt}
+
+    final_size = str(size or IMAGE_GENERATION_SIZE).strip()
+    if final_size:
+        request_kwargs["size"] = final_size
+
+    final_quality = str(quality or IMAGE_GENERATION_QUALITY).strip()
+    if final_quality:
+        request_kwargs["quality"] = final_quality
+
+    final_style = str(style or IMAGE_GENERATION_STYLE).strip()
+    if final_style:
+        request_kwargs["style"] = final_style
+
+    if IMAGE_GENERATION_RESPONSE_FORMAT in {"url", "b64_json"}:
+        request_kwargs["response_format"] = IMAGE_GENERATION_RESPONSE_FORMAT
+
+    normalized_urls = _normalize_image_urls(image_urls)
+    if normalized_urls:
+        extra_body = {}
+        if len(normalized_urls) == 1:
+            extra_body["image_url"] = normalized_urls[0]
+        else:
+            extra_body["image_urls"] = normalized_urls
+        request_kwargs["extra_body"] = extra_body
+    return request_kwargs
+
+
+def _extract_generated_image_payload(response_obj):
+    data_items = _get_attr_or_key(response_obj, "data", None)
+    if not isinstance(data_items, list) or (not data_items):
+        raise RuntimeError("模型未返回图片数据。")
+
+    for item in data_items:
+        revised_prompt = str(_get_attr_or_key(item, "revised_prompt", "") or "").strip()
+
+        b64_json = _get_attr_or_key(item, "b64_json", None)
+        image_bytes = _decode_base64_image(b64_json)
+        if image_bytes:
+            return image_bytes, revised_prompt
+
+        image_url = str(_get_attr_or_key(item, "url", "") or "").strip()
+        if image_url:
+            image_bytes = _download_generated_image(image_url)
+            if image_bytes:
+                return image_bytes, revised_prompt
+
+    raise RuntimeError("模型未返回可用图片内容。")
+
+
+def generate_image(prompt, image_urls=None, size=None, quality=None, style=None):
+    normalized_prompt = str(prompt or "").strip()
+    if not normalized_prompt:
+        raise ValueError("提示词不能为空。")
+    if not API_KEY:
+        raise ImageGenerationNotConfiguredError("缺少可用的模型认证配置。")
+    if not IMAGE_GENERATION_MODEL:
+        raise ImageGenerationNotConfiguredError("当前未启用图片生成模型。")
+    if (not hasattr(client, "images")) or (not hasattr(client.images, "generate")):
+        raise RuntimeError("当前 SDK 不支持图片生成接口。")
+
+    normalized_urls = _normalize_image_urls(image_urls)
+    request_kwargs = _build_image_generation_kwargs(
+        normalized_prompt,
+        image_urls=normalized_urls,
+        size=size,
+        quality=quality,
+        style=style,
+    )
+
+    image_client = client
+    if hasattr(client, "with_options"):
+        image_client = client.with_options(timeout=IMAGE_GENERATION_TIMEOUT_SECONDS)
+    response = image_client.images.generate(**request_kwargs)
+    image_bytes, revised_prompt = _extract_generated_image_payload(response)
+    image_ext = _guess_generated_image_ext(image_bytes)
+    filename = f"generated-{int(time.time())}.{image_ext}"
+    return {
+        "image_bytes": image_bytes,
+        "filename": filename,
+        "model": IMAGE_GENERATION_MODEL,
+        "revised_prompt": revised_prompt,
+        "input_image_count": len(normalized_urls),
+    }
 
 
 def _extract_response_output_text(response_obj):
@@ -581,24 +736,24 @@ def get_ai_response(user_message):
         yield from _stream_response_by_model(DEFAULT_MODEL, augmented_messages)
         return
 
-    vision_emitted = False
+    image_understanding_emitted = False
     try:
-        for chunk in _stream_response_by_model(VISION_MODEL, augmented_messages):
-            vision_emitted = True
+        for chunk in _stream_response_by_model(IMAGE_UNDERSTANDING_MODEL, augmented_messages):
+            image_understanding_emitted = True
             yield chunk
         return
     except Exception:
-        if vision_emitted:
+        if image_understanding_emitted:
             raise
-        # 视觉模型失败时，回退到默认文本模型并移除图片内容，避免再次因 image_url 报错。
+        # 图生文模型失败时，回退到默认文本模型并移除图片内容，避免再次因 image_url 报错。
         fallback_messages = _strip_images_from_messages(augmented_messages)
-        yield "[提示] 视觉模型当前不可用，已回退到文本模型，以下回答基于文字信息。\n\n"
+        yield "[提示] 图片理解模型当前不可用，已回退到文本模型，以下回答基于文字信息。\n\n"
         try:
             yield from _stream_response_by_model(DEFAULT_MODEL, fallback_messages)
             return
         except Exception as exc:
             raise RuntimeError(
-                "视觉模型调用失败，且文本回退也失败。请检查模型名或 API 权限。"
+                "图片理解模型调用失败，且文本回退也失败。请检查模型名或 API 权限。"
             ) from exc
 
 
