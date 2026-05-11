@@ -14,20 +14,26 @@ import requests
 load_dotenv()
 
 API_KEY = os.getenv('GROK_API_KEY')
-client = OpenAI(api_key=API_KEY, base_url="https://api.x.ai/v1")
+API_BASE_URL = "https://api.x.ai/v1"
+client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
+# 图片生成/编辑允许单独走 OpenAI 兼容配置，不影响聊天模型通道。
+IMAGE_GENEDIT_API_KEY = os.getenv("IMAGE_GENEDIT_API_KEY", os.getenv("OPENAI_API_KEY", API_KEY or "")).strip()
+IMAGE_GENEDIT_API_BASE_URL = "https://api.openai.com/v1"
+image_genedit_client = OpenAI(api_key=IMAGE_GENEDIT_API_KEY, base_url=IMAGE_GENEDIT_API_BASE_URL)
 # 纯文本对话模型（默认聊天）
 DEFAULT_MODEL = "grok-4.3"
 # 图生文模型：输入图片（可附文字）并输出文本理解结果。
 IMAGE_UNDERSTANDING_MODEL = "grok-4.3"
-# 图片生成模型：支持纯文本生成，也可使用参考图进行编辑；留空表示关闭此能力。
-IMAGE_GENERATION_MODEL = ""
-IMAGE_GENERATION_SIZE = "1024x1024"
-IMAGE_GENERATION_QUALITY = ""
-IMAGE_GENERATION_STYLE = ""
-IMAGE_GENERATION_RESPONSE_FORMAT = ""  # 可选: "", "b64_json", "url"
-IMAGE_GENERATION_TIMEOUT_SECONDS = 120.0
-IMAGE_GENERATION_DOWNLOAD_TIMEOUT_SECONDS = 30.0
-IMAGE_GENERATION_MAX_INPUT_IMAGES = 5
+# 图片生成/编辑模型：支持纯文本生成，也可使用参考图进行编辑；留空表示关闭此能力。
+IMAGE_GENEDIT_MODEL = ""
+IMAGE_GENEDIT_SIZE = "1024x1024"
+IMAGE_GENEDIT_QUALITY = ""
+IMAGE_GENEDIT_STYLE = ""
+IMAGE_GENEDIT_RESPONSE_FORMAT = ""  # 可选: "", "b64_json", "url"
+IMAGE_GENEDIT_TIMEOUT_SECONDS = 600.0
+IMAGE_GENEDIT_DOWNLOAD_TIMEOUT_SECONDS = 30.0
+# OpenAI 文档中 GPT Image 模型的 JSON 编辑请求支持最多 16 张参考图。
+IMAGE_GENEDIT_MAX_INPUT_IMAGES = 16
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_SEARCH_ENDPOINT = os.getenv("EXA_SEARCH_ENDPOINT", "https://api.exa.ai/search").strip()
 # 预留给 Responses API 的 tools，后续可直接填入 web_search/function 等定义。
@@ -91,7 +97,7 @@ _EXA_DECISION_CACHE = OrderedDict()
 _EXA_DECISION_CACHE_LOCK = threading.Lock()
 
 
-class ImageGenerationNotConfiguredError(RuntimeError):
+class ImageGenEditNotConfiguredError(RuntimeError):
     pass
 
 
@@ -292,13 +298,13 @@ def _decode_base64_image(base64_text):
         return None
 
 
-def _download_generated_image(image_url):
-    response = requests.get(image_url, timeout=IMAGE_GENERATION_DOWNLOAD_TIMEOUT_SECONDS)
+def _download_genedit_output_image(image_url):
+    response = requests.get(image_url, timeout=IMAGE_GENEDIT_DOWNLOAD_TIMEOUT_SECONDS)
     response.raise_for_status()
     return response.content
 
 
-def _guess_generated_image_ext(image_bytes):
+def _guess_genedit_output_image_ext(image_bytes):
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     if image_bytes.startswith(b"\xff\xd8\xff"):
@@ -310,7 +316,7 @@ def _guess_generated_image_ext(image_bytes):
     return "png"
 
 
-def _normalize_image_urls(image_urls):
+def _normalize_genedit_input_image_urls(image_urls):
     if image_urls is None:
         return []
     normalized_urls = []
@@ -321,41 +327,102 @@ def _normalize_image_urls(image_urls):
             continue
         seen.add(url)
         normalized_urls.append(url)
-        if len(normalized_urls) >= IMAGE_GENERATION_MAX_INPUT_IMAGES:
+        if len(normalized_urls) >= IMAGE_GENEDIT_MAX_INPUT_IMAGES:
             break
     return normalized_urls
 
 
-def _build_image_generation_kwargs(prompt, image_urls=None, size=None, quality=None, style=None):
-    request_kwargs = {"model": IMAGE_GENERATION_MODEL, "prompt": prompt}
+def _normalize_api_base_url(base_url):
+    raw = str(base_url or "").strip()
+    if not raw:
+        raise RuntimeError("图片 API 地址未配置。")
+    return raw.rstrip("/")
 
-    final_size = str(size or IMAGE_GENERATION_SIZE).strip()
+
+def _build_genedit_generate_request_kwargs(prompt, size=None, quality=None, style=None):
+    request_kwargs = {"model": IMAGE_GENEDIT_MODEL, "prompt": prompt}
+
+    final_size = str(size or IMAGE_GENEDIT_SIZE).strip()
     if final_size:
         request_kwargs["size"] = final_size
 
-    final_quality = str(quality or IMAGE_GENERATION_QUALITY).strip()
+    final_quality = str(quality or IMAGE_GENEDIT_QUALITY).strip()
     if final_quality:
         request_kwargs["quality"] = final_quality
 
-    final_style = str(style or IMAGE_GENERATION_STYLE).strip()
+    final_style = str(style or IMAGE_GENEDIT_STYLE).strip()
     if final_style:
         request_kwargs["style"] = final_style
 
-    if IMAGE_GENERATION_RESPONSE_FORMAT in {"url", "b64_json"}:
-        request_kwargs["response_format"] = IMAGE_GENERATION_RESPONSE_FORMAT
-
-    normalized_urls = _normalize_image_urls(image_urls)
-    if normalized_urls:
-        extra_body = {}
-        if len(normalized_urls) == 1:
-            extra_body["image_url"] = normalized_urls[0]
-        else:
-            extra_body["image_urls"] = normalized_urls
-        request_kwargs["extra_body"] = extra_body
+    if IMAGE_GENEDIT_RESPONSE_FORMAT in {"url", "b64_json"}:
+        request_kwargs["response_format"] = IMAGE_GENEDIT_RESPONSE_FORMAT
     return request_kwargs
 
 
-def _extract_generated_image_payload(response_obj):
+def _build_genedit_edit_request_body(prompt, image_urls, quality=None, style=None):
+    normalized_urls = _normalize_genedit_input_image_urls(image_urls)
+    if not normalized_urls:
+        raise ValueError("缺少参考图，无法执行图片编辑。")
+
+    request_body = {
+        "model": IMAGE_GENEDIT_MODEL,
+        "prompt": prompt,
+    }
+
+    # OpenAI JSON 编辑请求使用 images 数组，元素可为 image_url 或 file_id。
+    request_body["images"] = [
+        {"image_url": image_url}
+        for image_url in normalized_urls
+    ]
+
+    final_quality = str(quality or IMAGE_GENEDIT_QUALITY).strip()
+    if final_quality:
+        request_body["quality"] = final_quality
+
+    final_style = str(style or IMAGE_GENEDIT_STYLE).strip()
+    if final_style:
+        request_body["style"] = final_style
+
+    if IMAGE_GENEDIT_RESPONSE_FORMAT in {"url", "b64_json"}:
+        request_body["response_format"] = IMAGE_GENEDIT_RESPONSE_FORMAT
+    return request_body
+
+
+def _request_genedit_edit(prompt, image_urls, quality=None, style=None):
+    request_body = _build_genedit_edit_request_body(
+        prompt,
+        image_urls=image_urls,
+        quality=quality,
+        style=style,
+    )
+    endpoint = _normalize_api_base_url(IMAGE_GENEDIT_API_BASE_URL) + "/images/edits"
+    headers = {
+        "Authorization": f"Bearer {IMAGE_GENEDIT_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(
+        endpoint,
+        headers=headers,
+        json=request_body,
+        timeout=IMAGE_GENEDIT_TIMEOUT_SECONDS,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        error_payload = ""
+        try:
+            error_payload = json.dumps(response.json(), ensure_ascii=False)
+        except Exception:
+            error_payload = (response.text or "").strip()
+        if len(error_payload) > 500:
+            error_payload = error_payload[:499].rstrip() + "…"
+        raise RuntimeError(
+            f"图片编辑请求失败（HTTP {response.status_code}）：{error_payload or '无错误详情'}"
+        ) from exc
+    return response.json()
+
+
+def _extract_genedit_output_payload(response_obj):
     data_items = _get_attr_or_key(response_obj, "data", None)
     if not isinstance(data_items, list) or (not data_items):
         raise RuntimeError("模型未返回图片数据。")
@@ -370,44 +437,51 @@ def _extract_generated_image_payload(response_obj):
 
         image_url = str(_get_attr_or_key(item, "url", "") or "").strip()
         if image_url:
-            image_bytes = _download_generated_image(image_url)
+            image_bytes = _download_genedit_output_image(image_url)
             if image_bytes:
                 return image_bytes, revised_prompt
 
     raise RuntimeError("模型未返回可用图片内容。")
 
 
-def generate_image(prompt, image_urls=None, size=None, quality=None, style=None):
+def run_image_genedit(prompt, image_urls=None, size=None, quality=None, style=None):
     normalized_prompt = str(prompt or "").strip()
     if not normalized_prompt:
         raise ValueError("提示词不能为空。")
-    if not API_KEY:
-        raise ImageGenerationNotConfiguredError("缺少可用的模型认证配置。")
-    if not IMAGE_GENERATION_MODEL:
-        raise ImageGenerationNotConfiguredError("当前未启用图片生成模型。")
-    if (not hasattr(client, "images")) or (not hasattr(client.images, "generate")):
-        raise RuntimeError("当前 SDK 不支持图片生成接口。")
+    if not IMAGE_GENEDIT_API_KEY:
+        raise ImageGenEditNotConfiguredError("缺少可用的模型认证配置。")
+    if not IMAGE_GENEDIT_MODEL:
+        raise ImageGenEditNotConfiguredError("当前未启用图片生成/编辑模型。")
 
-    normalized_urls = _normalize_image_urls(image_urls)
-    request_kwargs = _build_image_generation_kwargs(
-        normalized_prompt,
-        image_urls=normalized_urls,
-        size=size,
-        quality=quality,
-        style=style,
-    )
-
-    image_client = client
-    if hasattr(client, "with_options"):
-        image_client = client.with_options(timeout=IMAGE_GENERATION_TIMEOUT_SECONDS)
-    response = image_client.images.generate(**request_kwargs)
-    image_bytes, revised_prompt = _extract_generated_image_payload(response)
-    image_ext = _guess_generated_image_ext(image_bytes)
+    normalized_urls = _normalize_genedit_input_image_urls(image_urls)
+    if normalized_urls:
+        # 有参考图时，必须走图片编辑端点，否则参考图会被当作无关字段忽略。
+        response_obj = _request_genedit_edit(
+            normalized_prompt,
+            image_urls=normalized_urls,
+            quality=quality,
+            style=style,
+        )
+    else:
+        if (not hasattr(image_genedit_client, "images")) or (not hasattr(image_genedit_client.images, "generate")):
+            raise RuntimeError("当前 SDK 不支持图片生成/编辑接口。")
+        request_kwargs = _build_genedit_generate_request_kwargs(
+            normalized_prompt,
+            size=size,
+            quality=quality,
+            style=style,
+        )
+        local_image_genedit_client = image_genedit_client
+        if hasattr(image_genedit_client, "with_options"):
+            local_image_genedit_client = image_genedit_client.with_options(timeout=IMAGE_GENEDIT_TIMEOUT_SECONDS)
+        response_obj = local_image_genedit_client.images.generate(**request_kwargs)
+    image_bytes, revised_prompt = _extract_genedit_output_payload(response_obj)
+    image_ext = _guess_genedit_output_image_ext(image_bytes)
     filename = f"generated-{int(time.time())}.{image_ext}"
     return {
         "image_bytes": image_bytes,
         "filename": filename,
-        "model": IMAGE_GENERATION_MODEL,
+        "model": IMAGE_GENEDIT_MODEL,
         "revised_prompt": revised_prompt,
         "input_image_count": len(normalized_urls),
     }

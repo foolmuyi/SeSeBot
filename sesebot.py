@@ -10,8 +10,8 @@ from collections import deque
 from datetime import datetime
 from pixiv import download_pixiv_img, get_pixiv_ranking
 from aichat import (
-    ImageGenerationNotConfiguredError,
-    generate_image,
+    ImageGenEditNotConfiguredError,
+    run_image_genedit,
     parse_reminder_request,
     stream_ai_response,
 )
@@ -972,7 +972,7 @@ class TelegramBot:
 
         status_reply = None
         try:
-            status_reply = await incoming_message.reply_text("正在生成图片，请稍候...")
+            status_reply = await incoming_message.reply_text("正在生成/编辑图片，请稍候...")
         except Exception:
             pass
 
@@ -996,7 +996,7 @@ class TelegramBot:
 
         try:
             result = await asyncio.to_thread(
-                generate_image,
+                run_image_genedit,
                 prompt,
                 input_image_urls,
             )
@@ -1008,17 +1008,17 @@ class TelegramBot:
             revised_prompt = str(result.get("revised_prompt", "")).strip()
             input_count = int(result.get("input_image_count", 0) or 0)
             if input_count > 0:
-                message_lines = [f"已完成图片生成（模型：{result.get('model', 'unknown')}，参考图：{input_count}张）"]
+                message_lines = [f"已完成图片生成/编辑（模型：{result.get('model', 'unknown')}，参考图：{input_count}张）"]
             else:
-                message_lines = [f"已完成图片生成（模型：{result.get('model', 'unknown')}）"]
+                message_lines = [f"已完成图片生成/编辑（模型：{result.get('model', 'unknown')}）"]
             if revised_prompt and revised_prompt != prompt:
                 if len(revised_prompt) > 240:
                     revised_prompt = revised_prompt[:239].rstrip() + "…"
                 message_lines.append(f"模型优化提示词：{revised_prompt}")
             await finish_status("\n".join(message_lines))
-        except ImageGenerationNotConfiguredError as exc:
+        except ImageGenEditNotConfiguredError as exc:
             await finish_status(
-                "图片生成功能当前不可用。\n"
+                "图片生成/编辑功能当前不可用。\n"
                 f"{exc}\n"
                 "请联系管理员检查模型与鉴权配置后重试。"
             )
@@ -1031,14 +1031,14 @@ class TelegramBot:
                 if len(error_text) > 300:
                     error_text = error_text[:299].rstrip() + "…"
                 if input_image_urls:
-                    await finish_status(f"图片生成失败：{error_text}\n当前模型可能不支持参考图输入，请改用纯文本生成或更换模型。")
+                    await finish_status(f"图片生成/编辑失败：{error_text}\n当前模型可能不支持参考图输入，请改用纯文本生成或更换模型。")
                 else:
-                    await finish_status(f"图片生成失败：{error_text}")
+                    await finish_status(f"图片生成/编辑失败：{error_text}")
             else:
                 if input_image_urls:
-                    await finish_status("图片生成失败：请检查模型可用性和 API 权限。当前模型可能不支持参考图输入。")
+                    await finish_status("图片生成/编辑失败：请检查模型可用性和 API 权限。当前模型可能不支持参考图输入。")
                 else:
-                    await finish_status("图片生成失败：请检查模型可用性和 API 权限。")
+                    await finish_status("图片生成/编辑失败：请检查模型可用性和 API 权限。")
 
     @check_access
     async def remind_command(self, update, context):
