@@ -17,13 +17,11 @@ API_KEY = os.getenv('GROK_API_KEY')
 API_BASE_URL = "https://api.x.ai/v1"
 client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 # 图片生成/编辑允许单独走 OpenAI 兼容配置，不影响聊天模型通道。
-IMAGE_GENEDIT_API_KEY = os.getenv("IMAGE_GENEDIT_API_KEY", os.getenv("OPENAI_API_KEY", API_KEY or "")).strip()
+IMAGE_GENEDIT_API_KEY = os.getenv("IMAGE_GENEDIT_API_KEY").strip()
 IMAGE_GENEDIT_API_BASE_URL = "https://api.openai.com/v1"
 image_genedit_client = OpenAI(api_key=IMAGE_GENEDIT_API_KEY, base_url=IMAGE_GENEDIT_API_BASE_URL)
 # 纯文本对话模型（默认聊天）
 DEFAULT_MODEL = "grok-4.3"
-# 图生文模型：输入图片（可附文字）并输出文本理解结果。
-IMAGE_UNDERSTANDING_MODEL = "grok-4.3"
 # 图片生成/编辑模型：支持纯文本生成，也可使用参考图进行编辑；留空表示关闭此能力。
 IMAGE_GENEDIT_MODEL = ""
 IMAGE_GENEDIT_SIZE = "1024x1024"
@@ -194,28 +192,6 @@ def _stream_with_responses_api(model_name, user_message):
 
 def _stream_response_by_model(model_name, user_message):
     yield from _stream_with_responses_api(model_name, user_message)
-
-
-def _strip_images_from_messages(messages):
-    text_messages = []
-    for message in messages:
-        role = message.get("role", "user")
-        content = message.get("content", "")
-        if not isinstance(content, list):
-            text_messages.append({"role": role, "content": content})
-            continue
-
-        text_parts = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                text = part.get("text", "").strip()
-                if text:
-                    text_parts.append(text)
-        text_content = "\n".join(text_parts).strip()
-        if (not text_content) and role == "user":
-            text_content = "[用户发送了图片，但当前模型暂时无法读取图片内容]"
-        text_messages.append({"role": role, "content": text_content})
-    return text_messages
 
 
 def _normalize_whitespace(text):
@@ -805,30 +781,7 @@ def get_ai_response(user_message):
     except Exception as exc:
         logger.warning("[Exa] 上下文构建失败，回退到模型直答: %s", exc)
         augmented_messages = user_message
-    has_image = _message_has_image(augmented_messages)
-    if not has_image:
-        yield from _stream_response_by_model(DEFAULT_MODEL, augmented_messages)
-        return
-
-    image_understanding_emitted = False
-    try:
-        for chunk in _stream_response_by_model(IMAGE_UNDERSTANDING_MODEL, augmented_messages):
-            image_understanding_emitted = True
-            yield chunk
-        return
-    except Exception:
-        if image_understanding_emitted:
-            raise
-        # 图生文模型失败时，回退到默认文本模型并移除图片内容，避免再次因 image_url 报错。
-        fallback_messages = _strip_images_from_messages(augmented_messages)
-        yield "[提示] 图片理解模型当前不可用，已回退到文本模型，以下回答基于文字信息。\n\n"
-        try:
-            yield from _stream_response_by_model(DEFAULT_MODEL, fallback_messages)
-            return
-        except Exception as exc:
-            raise RuntimeError(
-                "图片理解模型调用失败，且文本回退也失败。请检查模型名或 API 权限。"
-            ) from exc
+    yield from _stream_response_by_model(DEFAULT_MODEL, augmented_messages)
 
 
 async def stream_ai_response(user_message):

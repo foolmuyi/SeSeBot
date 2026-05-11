@@ -26,7 +26,6 @@ pip3 install -r requirements.txt
   -  `CF_BNALPHA_KEY`: your bnalpha Cloudflare worker authentication key
   -  LLM API key from Grok, OpenAI or any other provider
 - To enable image generation/editing, set these code-level constants:
-  - `IMAGE_UNDERSTANDING_MODEL` for image understanding (image -> text)
   - `IMAGE_GENEDIT_MODEL` for image generation/editing (text -> image, or image+text -> image; empty string means disabled)
   - Optional: `IMAGE_GENEDIT_SIZE`, `IMAGE_GENEDIT_QUALITY`, `IMAGE_GENEDIT_STYLE`, `IMAGE_GENEDIT_RESPONSE_FORMAT`
 - Create `whitelist.json` and fill it with the Telegram `chat_id` of yourself and your friends.
