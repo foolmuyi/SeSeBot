@@ -17,7 +17,7 @@ API_KEY = os.getenv('GROK_API_KEY')
 API_BASE_URL = "https://api.x.ai/v1"
 client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 # 图片生成/编辑允许单独走 OpenAI 兼容配置，不影响聊天模型通道。
-IMAGE_GENEDIT_API_KEY = os.getenv("IMAGE_GENEDIT_API_KEY").strip()
+IMAGE_GENEDIT_API_KEY = os.getenv("IMAGE_GENEDIT_API_KEY", "").strip()
 IMAGE_GENEDIT_API_BASE_URL = "https://api.openai.com/v1"
 image_genedit_client = OpenAI(api_key=IMAGE_GENEDIT_API_KEY, base_url=IMAGE_GENEDIT_API_BASE_URL)
 # 纯文本对话模型（默认聊天）
@@ -308,13 +308,6 @@ def _normalize_genedit_input_image_urls(image_urls):
     return normalized_urls
 
 
-def _normalize_api_base_url(base_url):
-    raw = str(base_url or "").strip()
-    if not raw:
-        raise RuntimeError("图片 API 地址未配置。")
-    return raw.rstrip("/")
-
-
 def _build_genedit_generate_request_kwargs(prompt, size=None, quality=None, style=None):
     request_kwargs = {"model": IMAGE_GENEDIT_MODEL, "prompt": prompt}
 
@@ -335,67 +328,93 @@ def _build_genedit_generate_request_kwargs(prompt, size=None, quality=None, styl
     return request_kwargs
 
 
-def _build_genedit_edit_request_body(prompt, image_urls, quality=None, style=None):
+def _guess_extension_from_mime(mime_type):
+    normalized = str(mime_type or "").strip().lower()
+    if normalized == "image/jpeg":
+        return "jpg"
+    if normalized == "image/png":
+        return "png"
+    if normalized == "image/webp":
+        return "webp"
+    if normalized == "image/gif":
+        return "gif"
+    if normalized == "image/bmp":
+        return "bmp"
+    return "png"
+
+
+def _parse_genedit_data_url(image_url):
+    header, separator, payload = str(image_url or "").partition(",")
+    if not separator:
+        raise ValueError("参考图 data URL 格式无效。")
+    if not header.startswith("data:"):
+        raise ValueError("参考图不是 data URL。")
+
+    meta = header[5:]
+    parts = [part.strip() for part in meta.split(";") if part.strip()]
+    mime_type = "application/octet-stream"
+    if parts and ("/" in parts[0]):
+        mime_type = parts[0]
+        parts = parts[1:]
+    is_base64 = any(part.lower() == "base64" for part in parts)
+    if not is_base64:
+        raise ValueError("参考图 data URL 必须为 base64 编码。")
+
+    image_bytes = _decode_base64_image(payload)
+    if not image_bytes:
+        raise ValueError("参考图 data URL 解码失败。")
+    return mime_type, image_bytes
+
+
+def _build_genedit_edit_image_file(image_url, index):
+    normalized_url = str(image_url or "").strip()
+    if not normalized_url:
+        raise ValueError("参考图为空。")
+
+    if normalized_url.startswith("data:"):
+        mime_type, image_bytes = _parse_genedit_data_url(normalized_url)
+    else:
+        response = requests.get(normalized_url, timeout=IMAGE_GENEDIT_DOWNLOAD_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        image_bytes = response.content
+        mime_type = str(response.headers.get("Content-Type", "")).split(";")[0].strip().lower()
+        if not mime_type.startswith("image/"):
+            mime_type = "image/png"
+
+    file_ext = _guess_extension_from_mime(mime_type)
+    filename = f"genedit-input-{index}.{file_ext}"
+    return (filename, image_bytes, mime_type)
+
+
+def _build_genedit_edit_request_kwargs(prompt, image_urls, size=None, quality=None, style=None):
     normalized_urls = _normalize_genedit_input_image_urls(image_urls)
     if not normalized_urls:
         raise ValueError("缺少参考图，无法执行图片编辑。")
 
-    request_body = {
+    request_kwargs = {
         "model": IMAGE_GENEDIT_MODEL,
         "prompt": prompt,
+        "image": [
+            _build_genedit_edit_image_file(image_url, idx)
+            for idx, image_url in enumerate(normalized_urls, 1)
+        ],
     }
 
-    # OpenAI JSON 编辑请求使用 images 数组，元素可为 image_url 或 file_id。
-    request_body["images"] = [
-        {"image_url": image_url}
-        for image_url in normalized_urls
-    ]
+    final_size = str(size or IMAGE_GENEDIT_SIZE).strip()
+    if final_size:
+        request_kwargs["size"] = final_size
 
     final_quality = str(quality or IMAGE_GENEDIT_QUALITY).strip()
     if final_quality:
-        request_body["quality"] = final_quality
+        request_kwargs["quality"] = final_quality
 
     final_style = str(style or IMAGE_GENEDIT_STYLE).strip()
     if final_style:
-        request_body["style"] = final_style
+        request_kwargs["style"] = final_style
 
     if IMAGE_GENEDIT_RESPONSE_FORMAT in {"url", "b64_json"}:
-        request_body["response_format"] = IMAGE_GENEDIT_RESPONSE_FORMAT
-    return request_body
-
-
-def _request_genedit_edit(prompt, image_urls, quality=None, style=None):
-    request_body = _build_genedit_edit_request_body(
-        prompt,
-        image_urls=image_urls,
-        quality=quality,
-        style=style,
-    )
-    endpoint = _normalize_api_base_url(IMAGE_GENEDIT_API_BASE_URL) + "/images/edits"
-    headers = {
-        "Authorization": f"Bearer {IMAGE_GENEDIT_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    response = requests.post(
-        endpoint,
-        headers=headers,
-        json=request_body,
-        timeout=IMAGE_GENEDIT_TIMEOUT_SECONDS,
-    )
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        error_payload = ""
-        try:
-            error_payload = json.dumps(response.json(), ensure_ascii=False)
-        except Exception:
-            error_payload = (response.text or "").strip()
-        if len(error_payload) > 500:
-            error_payload = error_payload[:499].rstrip() + "…"
-        raise RuntimeError(
-            f"图片编辑请求失败（HTTP {response.status_code}）：{error_payload or '无错误详情'}"
-        ) from exc
-    return response.json()
+        request_kwargs["response_format"] = IMAGE_GENEDIT_RESPONSE_FORMAT
+    return request_kwargs
 
 
 def _extract_genedit_output_payload(response_obj):
@@ -431,13 +450,19 @@ def run_image_genedit(prompt, image_urls=None, size=None, quality=None, style=No
 
     normalized_urls = _normalize_genedit_input_image_urls(image_urls)
     if normalized_urls:
-        # 有参考图时，必须走图片编辑端点，否则参考图会被当作无关字段忽略。
-        response_obj = _request_genedit_edit(
+        if (not hasattr(image_genedit_client, "images")) or (not hasattr(image_genedit_client.images, "edit")):
+            raise RuntimeError("当前 SDK 不支持图片编辑接口。")
+        request_kwargs = _build_genedit_edit_request_kwargs(
             normalized_prompt,
             image_urls=normalized_urls,
+            size=size,
             quality=quality,
             style=style,
         )
+        local_image_genedit_client = image_genedit_client
+        if hasattr(image_genedit_client, "with_options"):
+            local_image_genedit_client = image_genedit_client.with_options(timeout=IMAGE_GENEDIT_TIMEOUT_SECONDS)
+        response_obj = local_image_genedit_client.images.edit(**request_kwargs)
     else:
         if (not hasattr(image_genedit_client, "images")) or (not hasattr(image_genedit_client.images, "generate")):
             raise RuntimeError("当前 SDK 不支持图片生成/编辑接口。")
