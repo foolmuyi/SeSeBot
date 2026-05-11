@@ -26,11 +26,10 @@ DEFAULT_MODEL = "grok-4.3"
 IMAGE_GENEDIT_MODEL = ""
 IMAGE_GENEDIT_SIZE = "1024x1024"
 IMAGE_GENEDIT_QUALITY = ""
-IMAGE_GENEDIT_STYLE = ""
-IMAGE_GENEDIT_RESPONSE_FORMAT = ""  # 可选: "", "b64_json", "url"
+IMAGE_GENEDIT_OUTPUT_FORMAT = ""  # 可选: "", "png", "jpeg", "webp"
 IMAGE_GENEDIT_TIMEOUT_SECONDS = 600.0
 IMAGE_GENEDIT_DOWNLOAD_TIMEOUT_SECONDS = 30.0
-# OpenAI 文档中 GPT Image 模型的 JSON 编辑请求支持最多 16 张参考图。
+# 图片编辑接口最多支持 16 张参考图。
 IMAGE_GENEDIT_MAX_INPUT_IMAGES = 16
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_SEARCH_ENDPOINT = os.getenv("EXA_SEARCH_ENDPOINT", "https://api.exa.ai/search").strip()
@@ -308,7 +307,7 @@ def _normalize_genedit_input_image_urls(image_urls):
     return normalized_urls
 
 
-def _build_genedit_generate_request_kwargs(prompt, size=None, quality=None, style=None):
+def _build_genedit_generate_request_kwargs(prompt, size=None, quality=None):
     request_kwargs = {"model": IMAGE_GENEDIT_MODEL, "prompt": prompt}
 
     final_size = str(size or IMAGE_GENEDIT_SIZE).strip()
@@ -319,12 +318,8 @@ def _build_genedit_generate_request_kwargs(prompt, size=None, quality=None, styl
     if final_quality:
         request_kwargs["quality"] = final_quality
 
-    final_style = str(style or IMAGE_GENEDIT_STYLE).strip()
-    if final_style:
-        request_kwargs["style"] = final_style
-
-    if IMAGE_GENEDIT_RESPONSE_FORMAT in {"url", "b64_json"}:
-        request_kwargs["response_format"] = IMAGE_GENEDIT_RESPONSE_FORMAT
+    if IMAGE_GENEDIT_OUTPUT_FORMAT in {"png", "jpeg", "webp"}:
+        request_kwargs["output_format"] = IMAGE_GENEDIT_OUTPUT_FORMAT
     return request_kwargs
 
 
@@ -386,18 +381,20 @@ def _build_genedit_edit_image_file(image_url, index):
     return (filename, image_bytes, mime_type)
 
 
-def _build_genedit_edit_request_kwargs(prompt, image_urls, size=None, quality=None, style=None):
+def _build_genedit_edit_request_kwargs(prompt, image_urls, size=None, quality=None):
     normalized_urls = _normalize_genedit_input_image_urls(image_urls)
     if not normalized_urls:
         raise ValueError("缺少参考图，无法执行图片编辑。")
 
+    image_files = [
+        _build_genedit_edit_image_file(image_url, idx)
+        for idx, image_url in enumerate(normalized_urls, 1)
+    ]
+
     request_kwargs = {
         "model": IMAGE_GENEDIT_MODEL,
         "prompt": prompt,
-        "image": [
-            _build_genedit_edit_image_file(image_url, idx)
-            for idx, image_url in enumerate(normalized_urls, 1)
-        ],
+        "image": image_files[0] if len(image_files) == 1 else image_files,
     }
 
     final_size = str(size or IMAGE_GENEDIT_SIZE).strip()
@@ -408,12 +405,8 @@ def _build_genedit_edit_request_kwargs(prompt, image_urls, size=None, quality=No
     if final_quality:
         request_kwargs["quality"] = final_quality
 
-    final_style = str(style or IMAGE_GENEDIT_STYLE).strip()
-    if final_style:
-        request_kwargs["style"] = final_style
-
-    if IMAGE_GENEDIT_RESPONSE_FORMAT in {"url", "b64_json"}:
-        request_kwargs["response_format"] = IMAGE_GENEDIT_RESPONSE_FORMAT
+    if IMAGE_GENEDIT_OUTPUT_FORMAT in {"png", "jpeg", "webp"}:
+        request_kwargs["output_format"] = IMAGE_GENEDIT_OUTPUT_FORMAT
     return request_kwargs
 
 
@@ -439,7 +432,7 @@ def _extract_genedit_output_payload(response_obj):
     raise RuntimeError("模型未返回可用图片内容。")
 
 
-def run_image_genedit(prompt, image_urls=None, size=None, quality=None, style=None):
+def run_image_genedit(prompt, image_urls=None, size=None, quality=None):
     normalized_prompt = str(prompt or "").strip()
     if not normalized_prompt:
         raise ValueError("提示词不能为空。")
@@ -457,7 +450,6 @@ def run_image_genedit(prompt, image_urls=None, size=None, quality=None, style=No
             image_urls=normalized_urls,
             size=size,
             quality=quality,
-            style=style,
         )
         local_image_genedit_client = image_genedit_client
         if hasattr(image_genedit_client, "with_options"):
@@ -470,7 +462,6 @@ def run_image_genedit(prompt, image_urls=None, size=None, quality=None, style=No
             normalized_prompt,
             size=size,
             quality=quality,
-            style=style,
         )
         local_image_genedit_client = image_genedit_client
         if hasattr(image_genedit_client, "with_options"):
