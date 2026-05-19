@@ -790,6 +790,33 @@ class TelegramBot:
         )
 
     @staticmethod
+    def _is_bot_message(message, bot_id):
+        return bool(
+            message
+            and message.from_user
+            and message.from_user.id == bot_id
+        )
+
+    @staticmethod
+    def _message_text(message):
+        if not message:
+            return ""
+        return (message.text or message.caption or "").strip()
+
+    def _build_replied_bot_context(self, message, bot_id):
+        replied_message = message.reply_to_message if message else None
+        if not self._is_bot_message(replied_message, bot_id):
+            return []
+        replied_text = self._message_text(replied_message)
+        quote = getattr(message, "quote", None)
+        quote_text = str(getattr(quote, "text", "") or "").strip()
+        if quote_text and replied_text and quote_text in replied_text:
+            replied_text = quote_text
+        if not replied_text:
+            replied_text = "[Bot 之前发送了一条非文本消息]"
+        return [{"role": "assistant", "content": replied_text}]
+
+    @staticmethod
     def _pick_media_group_anchor(messages):
         if not messages:
             return None
@@ -836,13 +863,23 @@ class TelegramBot:
             if each is not anchor_message
         ]
         try:
+            replied_trigger_message = next(
+                (each for each in messages if self._is_reply_to_bot(each, bucket.get("bot_id"))),
+                anchor_message,
+            )
             user_content, user_context_text = await self.build_user_multimodal_content(
                 anchor_message,
                 related_messages=related_messages,
             )
             if user_content is None:
                 return
-            await self._process_ai_chat(anchor_message, user_content, user_context_text)
+            replied_bot_context = self._build_replied_bot_context(replied_trigger_message, bucket.get("bot_id"))
+            await self._process_ai_chat(
+                anchor_message,
+                user_content,
+                user_context_text,
+                extra_context_messages=replied_bot_context,
+            )
         except Exception as e:
             logger.exception("flush_media_group failed")
             try:
@@ -850,7 +887,7 @@ class TelegramBot:
             except Exception:
                 pass
 
-    async def _process_ai_chat(self, incoming_message, user_content, user_context_text):
+    async def _process_ai_chat(self, incoming_message, user_content, user_context_text, extra_context_messages=None):
         typing_stop_event = None
         typing_task = None
         try:
@@ -866,7 +903,11 @@ class TelegramBot:
 
             self.ensure_aichat_context(chat_id)
             self.trim_aichat_context(chat_id)
-            llm_messages = self.aichat_contexts[chat_id] + [{"role": "user", "content": user_content}]
+            llm_messages = (
+                self.aichat_contexts[chat_id]
+                + list(extra_context_messages or [])
+                + [{"role": "user", "content": user_content}]
+            )
             self.aichat_contexts[chat_id].append({"role": "user", "content": user_context_text})
 
             logger.info("Waiting for LLM response...")
@@ -1146,7 +1187,13 @@ class TelegramBot:
             if user_content is None:
                 return
 
-            await self._process_ai_chat(incoming_message, user_content, user_context_text)
+            replied_bot_context = self._build_replied_bot_context(incoming_message, context.bot.id)
+            await self._process_ai_chat(
+                incoming_message,
+                user_content,
+                user_context_text,
+                extra_context_messages=replied_bot_context,
+            )
         except Exception as e:
             logger.exception("handle_message failed")
             await update.effective_message.reply_text('Error:\n' + str(e))
