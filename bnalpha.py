@@ -71,7 +71,7 @@ def check_alpha(start_ts):
             news_text = str(news.get('brief') or '')
             news_link = f'https://foresightnews.pro/news/detail/{news_id}'
             news_full_text = news_title + news_text
-            if ("alpha" in news_full_text.lower()) or ("tge" in news_full_text.lower()):
+            if ("alpha" in news_full_text.lower()) or ("tge" in news_full_text.lower()) or ("空投" in news_full_text):
                 if ("binance" in news_full_text.lower()) or ("币安" in news_full_text):
                     news_msg = f"{news_time}\n{news_title}\n{news_text}\n原文链接：{news_link}\n" + news_msg
     news_res = {'ts': max_ts, 'msg': news_msg}
