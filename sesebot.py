@@ -3,6 +3,7 @@ import os
 import io
 import base64
 import json
+import re
 import time
 import uuid
 import logging
@@ -722,7 +723,21 @@ class TelegramBot:
         base64_data = base64.b64encode(file_bytes).decode("ascii")
         return f"data:{mime_type};base64,{base64_data}"
 
-    async def build_user_multimodal_content(self, message, related_messages=None):
+    @staticmethod
+    def _strip_bot_mention(text, bot_username):
+        bot_username = str(bot_username or "").lstrip("@").strip()
+        if not bot_username:
+            return str(text or "").strip()
+        pattern = rf"(?i)(?<!\w)@{re.escape(bot_username)}(?!\w)"
+        return re.sub(pattern, "", str(text or "")).strip()
+
+    async def build_user_multimodal_content(
+        self,
+        message,
+        related_messages=None,
+        bot_username=None,
+        fallback_text=None,
+    ):
         candidate_messages = []
         if message:
             candidate_messages.append(message)
@@ -742,7 +757,10 @@ class TelegramBot:
                 if candidate_id in seen_message_ids:
                     continue
                 seen_message_ids.add(candidate_id)
-            candidate_text = (candidate.text or candidate.caption or "").strip()
+            candidate_text = self._strip_bot_mention(
+                (candidate.text or candidate.caption or "").strip(),
+                bot_username,
+            )
             if candidate_text and candidate_text not in message_text_parts:
                 message_text_parts.append(candidate_text)
             image_data_url = await self._extract_image_data_url(candidate)
@@ -756,6 +774,9 @@ class TelegramBot:
             replied_image = await self._extract_image_data_url(message.reply_to_message)
             if replied_image:
                 image_data_urls.append(replied_image)
+
+        if not message_text and fallback_text:
+            message_text = fallback_text
 
         if not message_text and not image_data_urls:
             return None, None
@@ -790,6 +811,18 @@ class TelegramBot:
         )
 
     @staticmethod
+    def _mentions_bot(message, bot_username):
+        bot_username = str(bot_username or "").lstrip("@").strip()
+        if not message or not bot_username:
+            return False
+        text = (message.text or message.caption or "")
+        pattern = rf"(?i)(?<!\w)@{re.escape(bot_username)}(?!\w)"
+        return bool(re.search(pattern, text))
+
+    def _should_ai_reply_in_group(self, message, bot_id, bot_username):
+        return self._is_reply_to_bot(message, bot_id) or self._mentions_bot(message, bot_username)
+
+    @staticmethod
     def _is_bot_message(message, bot_id):
         return bool(
             message
@@ -803,18 +836,49 @@ class TelegramBot:
             return ""
         return (message.text or message.caption or "").strip()
 
-    def _build_replied_bot_context(self, message, bot_id):
+    @staticmethod
+    def _message_has_image_attachment(message):
+        if not message:
+            return False
+        if message.photo:
+            return True
+        if message.document:
+            mime_type = (message.document.mime_type or "").strip().lower()
+            if mime_type.startswith("image/"):
+                return True
+            return TelegramBot._guess_image_mime_type(message.document.file_name) is not None
+        return False
+
+    def _build_replied_message_context(self, message, bot_id):
         replied_message = message.reply_to_message if message else None
-        if not self._is_bot_message(replied_message, bot_id):
+        if not replied_message:
             return []
+
+        role = "assistant" if self._is_bot_message(replied_message, bot_id) else "user"
         replied_text = self._message_text(replied_message)
         quote = getattr(message, "quote", None)
         quote_text = str(getattr(quote, "text", "") or "").strip()
         if quote_text and replied_text and quote_text in replied_text:
             replied_text = quote_text
+        if self._message_has_image_attachment(replied_message):
+            if replied_text:
+                replied_text = f"{replied_text}\n[被回复消息包含图片]"
+            else:
+                replied_text = "[被回复消息包含图片]"
         if not replied_text:
-            replied_text = "[Bot 之前发送了一条非文本消息]"
-        return [{"role": "assistant", "content": replied_text}]
+            replied_text = "[被回复消息为非文本消息]"
+        return [{"role": role, "content": replied_text}]
+
+    def _append_aichat_context_once(self, chat_id, message):
+        if not message:
+            return
+        for existing_message in self.aichat_contexts.get(chat_id, [])[-8:]:
+            if (
+                existing_message.get("role") == message.get("role")
+                and existing_message.get("content") == message.get("content")
+            ):
+                return
+        self.aichat_contexts[chat_id].append(message)
 
     @staticmethod
     def _pick_media_group_anchor(messages):
@@ -830,13 +894,13 @@ class TelegramBot:
             return None
         return f"{message.chat.id}:{message.from_user.id}:{message.media_group_id}"
 
-    async def _queue_media_group_message(self, message, bot_id):
+    async def _queue_media_group_message(self, message, bot_id, bot_username=None):
         group_key = self._build_media_group_key(message)
         if not group_key:
             return
         bucket = self.pending_media_groups.get(group_key)
         if bucket is None:
-            bucket = {"messages": [], "bot_id": bot_id}
+            bucket = {"messages": [], "bot_id": bot_id, "bot_username": bot_username}
             self.pending_media_groups[group_key] = bucket
             bucket["task"] = asyncio.create_task(self._flush_media_group(group_key))
         bucket["messages"].append(message)
@@ -856,7 +920,8 @@ class TelegramBot:
         chat_type = anchor_message.chat.type if anchor_message.chat else ""
         if chat_type != "private":
             bot_id = bucket.get("bot_id")
-            if not any(self._is_reply_to_bot(each, bot_id) for each in messages):
+            bot_username = bucket.get("bot_username")
+            if not any(self._should_ai_reply_in_group(each, bot_id, bot_username) for each in messages):
                 return
         related_messages = [
             each for each in messages
@@ -864,21 +929,26 @@ class TelegramBot:
         ]
         try:
             replied_trigger_message = next(
-                (each for each in messages if self._is_reply_to_bot(each, bucket.get("bot_id"))),
+                (each for each in messages if getattr(each, "reply_to_message", None)),
                 anchor_message,
+            )
+            replied_message_context = self._build_replied_message_context(
+                replied_trigger_message,
+                bucket.get("bot_id"),
             )
             user_content, user_context_text = await self.build_user_multimodal_content(
                 anchor_message,
                 related_messages=related_messages,
+                bot_username=bucket.get("bot_username"),
+                fallback_text="请结合被回复的消息回答。" if replied_message_context else None,
             )
             if user_content is None:
                 return
-            replied_bot_context = self._build_replied_bot_context(replied_trigger_message, bucket.get("bot_id"))
             await self._process_ai_chat(
                 anchor_message,
                 user_content,
                 user_context_text,
-                extra_context_messages=replied_bot_context,
+                history_context_messages=replied_message_context,
             )
         except Exception as e:
             logger.exception("flush_media_group failed")
@@ -887,7 +957,13 @@ class TelegramBot:
             except Exception:
                 pass
 
-    async def _process_ai_chat(self, incoming_message, user_content, user_context_text, extra_context_messages=None):
+    async def _process_ai_chat(
+        self,
+        incoming_message,
+        user_content,
+        user_context_text,
+        history_context_messages=None,
+    ):
         typing_stop_event = None
         typing_task = None
         try:
@@ -897,17 +973,15 @@ class TelegramBot:
             typing_task = asyncio.create_task(self.keep_typing(chat_id, typing_stop_event))
             fast_reply = await self.application.bot.send_message(
                 chat_id=chat_id,
-                text="容我想想...",
+                text="让我想想...",
                 reply_to_message_id=message_id,
             )
 
             self.ensure_aichat_context(chat_id)
             self.trim_aichat_context(chat_id)
-            llm_messages = (
-                self.aichat_contexts[chat_id]
-                + list(extra_context_messages or [])
-                + [{"role": "user", "content": user_content}]
-            )
+            for context_message in history_context_messages or []:
+                self._append_aichat_context_once(chat_id, context_message)
+            llm_messages = self.aichat_contexts[chat_id] + [{"role": "user", "content": user_content}]
             self.aichat_contexts[chat_id].append({"role": "user", "content": user_context_text})
 
             logger.info("Waiting for LLM response...")
@@ -1175,24 +1249,33 @@ class TelegramBot:
             return
         try:
             if incoming_message.media_group_id:
-                await self._queue_media_group_message(incoming_message, context.bot.id)
+                await self._queue_media_group_message(
+                    incoming_message,
+                    context.bot.id,
+                    bot_username=getattr(context.bot, "username", None),
+                )
                 return
             chat_type = incoming_message.chat.type if incoming_message.chat else ""
             is_private_chat = chat_type == "private"
+            bot_username = getattr(context.bot, "username", None)
             if not is_private_chat:
-                if not self._is_reply_to_bot(incoming_message, context.bot.id):
+                if not self._should_ai_reply_in_group(incoming_message, context.bot.id, bot_username):
                     return
 
-            user_content, user_context_text = await self.build_user_multimodal_content(incoming_message)
+            replied_message_context = self._build_replied_message_context(incoming_message, context.bot.id)
+            user_content, user_context_text = await self.build_user_multimodal_content(
+                incoming_message,
+                bot_username=bot_username,
+                fallback_text="请结合被回复的消息回答。" if replied_message_context else None,
+            )
             if user_content is None:
                 return
 
-            replied_bot_context = self._build_replied_bot_context(incoming_message, context.bot.id)
             await self._process_ai_chat(
                 incoming_message,
                 user_content,
                 user_context_text,
-                extra_context_messages=replied_bot_context,
+                history_context_messages=replied_message_context,
             )
         except Exception as e:
             logger.exception("handle_message failed")
