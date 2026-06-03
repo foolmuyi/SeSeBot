@@ -1,78 +1,81 @@
-import os
-import zlib
-import json
-import time
-import base64
+import html
 import logging
+import re
 import requests
-from datetime import datetime
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
-from urllib.parse import urlencode
-from dotenv import load_dotenv
-from http_utils import fetch_json
+from http_utils import fetch_response
 
-load_dotenv()
-
-CF_BNALPHA_URL = os.getenv('CF_BNALPHA_URL')
-CF_BNALPHA_KEY = os.getenv('CF_BNALPHA_KEY')
+PANEWS_RSS_URL = "https://www.panewslab.com/rss.xml?lang=zh&type=NEWS"
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'Referer': 'https://foresightnews.pro/',
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
 }
 TIMEOUT = (3, 30)
+TIMEZONE = ZoneInfo("Asia/Shanghai")
 logger = logging.getLogger(__name__)
 
 
-def build_bnalpha_proxy_url(url):
-    if not CF_BNALPHA_URL or not CF_BNALPHA_KEY:
-        raise ValueError('Missing CF_BNALPHA_URL or CF_BNALPHA_KEY')
-    return f"{CF_BNALPHA_URL}?{urlencode({'url': url})}"
+def clean_text(raw_text):
+    text = html.unescape(str(raw_text or ""))
+    text = re.sub(r"<[^>]+>", "", text)
+    return " ".join(text.split()).strip()
+
+
+def item_text(item, tag_name):
+    node = item.find(tag_name)
+    return clean_text(node.text if node is not None else "")
+
+
+def parse_pub_time(raw_text):
+    parsed_dt = parsedate_to_datetime(str(raw_text or "").strip())
+    if parsed_dt.tzinfo is None:
+        parsed_dt = parsed_dt.replace(tzinfo=TIMEZONE)
+    return parsed_dt.astimezone(TIMEZONE)
 
 
 def check_alpha(start_ts):
     logger.info("Checking alpha news...")
-    url = build_bnalpha_proxy_url("https://api.foresightnews.pro/v2/feed?page=1&size=30")
-    headers = HEADERS.copy()
-    headers['CF-Alpha-Key'] = CF_BNALPHA_KEY
-    response_data = fetch_json(
+    response = fetch_response(
         requests.get,
-        url=url,
+        url=PANEWS_RSS_URL,
         attempts=4,
         timeout=TIMEOUT,
-        headers=headers,
-        error_message='Failed to fetch alpha news',
+        headers=HEADERS,
+        error_message="Failed to fetch alpha news",
     )
-    encoded_data = response_data.get('data')
-    if not encoded_data:
-        raise ValueError('Failed to fetch alpha news: missing data')
-    compressed_data = base64.b64decode(encoded_data)
-    original_text = zlib.decompress(compressed_data).decode('utf-8')
-    original_data = json.loads(original_text)
-    all_feeds = original_data.get('list')
-    if not isinstance(all_feeds, list):
-        raise ValueError('Failed to fetch alpha news: invalid payload list')
-    all_news = [each for each in all_feeds if each.get('source_type') == 'news']
+
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError as exc:
+        raise ValueError("Failed to fetch alpha news: invalid RSS response") from exc
+
     max_ts = start_ts
-    news_msg = ''
-    for each_news in all_news:
-        news_ts = each_news.get('published_at')
-        if not isinstance(news_ts, (int, float)):
+    news_msg = ""
+    for item in root.findall(".//item"):
+        try:
+            published_dt = parse_pub_time(item_text(item, "pubDate"))
+        except (TypeError, ValueError):
             continue
+
+        news_ts = published_dt.timestamp()
         if news_ts > max_ts:
             max_ts = news_ts
-        if news_ts > start_ts:
-            news_time = datetime.fromtimestamp(news_ts, tz=ZoneInfo('Asia/Shanghai')).strftime("%Y-%m-%d %H:%M:%S")
-            news = each_news.get('news') or {}
-            news_id = each_news.get('source_id')
-            if not news_id:
-                continue
-            news_title = str(news.get('title') or '')
-            news_text = str(news.get('brief') or '')
-            news_link = f'https://foresightnews.pro/news/detail/{news_id}'
-            news_full_text = news_title + news_text
-            if ("alpha" in news_full_text.lower()) or ("tge" in news_full_text.lower()) or ("空投" in news_full_text):
-                if ("binance" in news_full_text.lower()) or ("币安" in news_full_text):
-                    news_msg = f"{news_time}\n{news_title}\n{news_text}\n原文链接：{news_link}\n" + news_msg
-    news_res = {'ts': max_ts, 'msg': news_msg}
-    return news_res
+        if news_ts <= start_ts:
+            continue
+
+        title = item_text(item, "title")
+        brief = item_text(item, "description")
+        link = item_text(item, "link")
+        full_text = f"{title}{brief}"
+        full_text_lower = full_text.lower()
+        if not ("alpha" in full_text_lower or "tge" in full_text_lower or "空投" in full_text):
+            continue
+        if not ("binance" in full_text_lower or "币安" in full_text):
+            continue
+
+        news_time = published_dt.strftime("%Y-%m-%d %H:%M:%S")
+        news_msg = f"{news_time}\n{title}\n{brief}\n原文链接：{link}\n" + news_msg
+
+    return {"ts": max_ts, "msg": news_msg}
