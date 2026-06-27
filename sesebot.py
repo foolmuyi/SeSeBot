@@ -41,6 +41,8 @@ class TelegramBot:
         self.filtered = {}
         self.aichat_contexts = {}
         self.pending_media_groups = {}
+        self.bot_id = None
+        self.bot_username = None
         dir_path = os.path.dirname(os.path.abspath(__file__))
         whitelist_path = os.path.join(dir_path, "whitelist.json")
         with open(whitelist_path, "r") as f:
@@ -811,16 +813,39 @@ class TelegramBot:
         )
 
     @staticmethod
-    def _mentions_bot(message, bot_username):
-        bot_username = str(bot_username or "").lstrip("@").strip()
-        if not message or not bot_username:
+    def _entity_text(text, entity):
+        try:
+            return entity.extract_from(text)
+        except Exception:
+            try:
+                return text[entity.offset: entity.offset + entity.length]
+            except Exception:
+                return ""
+
+    @staticmethod
+    def _mentions_bot(message, bot_id, bot_username):
+        if not message:
             return False
+        bot_username = str(bot_username or "").lstrip("@").strip()
         text = (message.text or message.caption or "")
-        pattern = rf"(?i)(?<!\w)@{re.escape(bot_username)}(?!\w)"
-        return bool(re.search(pattern, text))
+        if bot_username:
+            pattern = rf"(?i)(?<!\w)@{re.escape(bot_username)}(?!\w)"
+            if re.search(pattern, text):
+                return True
+
+        entities = list(message.entities or []) + list(message.caption_entities or [])
+        for entity in entities:
+            mentioned_user = getattr(entity, "user", None)
+            if mentioned_user and getattr(mentioned_user, "id", None) == bot_id:
+                return True
+            if bot_username and "mention" in str(getattr(entity, "type", "")).lower():
+                mention_text = TelegramBot._entity_text(text, entity).lower()
+                if mention_text == f"@{bot_username.lower()}":
+                    return True
+        return False
 
     def _should_ai_reply_in_group(self, message, bot_id, bot_username):
-        return self._is_reply_to_bot(message, bot_id) or self._mentions_bot(message, bot_username)
+        return self._is_reply_to_bot(message, bot_id) or self._mentions_bot(message, bot_id, bot_username)
 
     @staticmethod
     def _is_bot_message(message, bot_id):
@@ -1240,6 +1265,24 @@ class TelegramBot:
         elif action == "detail":
             await self.get_javdb_details(update, param)
 
+    @staticmethod
+    def _safe_bot_attr(bot, attr_name):
+        try:
+            return getattr(bot, attr_name, None)
+        except Exception:
+            return None
+
+    async def _get_bot_identity(self, context):
+        bot_id = self.bot_id or self._safe_bot_attr(context.bot, "id")
+        bot_username = self.bot_username or self._safe_bot_attr(context.bot, "username")
+        if bot_id and bot_username:
+            return bot_id, bot_username
+
+        bot_user = await context.bot.get_me()
+        self.bot_id = getattr(bot_user, "id", None) or bot_id
+        self.bot_username = getattr(bot_user, "username", None) or bot_username
+        return self.bot_id, self.bot_username
+
     async def handle_message(self, update, context):
         incoming_message = update.effective_message
         if not incoming_message or not incoming_message.from_user:
@@ -1248,21 +1291,21 @@ class TelegramBot:
         if user_id not in self.whitelist:
             return
         try:
+            bot_id, bot_username = await self._get_bot_identity(context)
             if incoming_message.media_group_id:
                 await self._queue_media_group_message(
                     incoming_message,
-                    context.bot.id,
-                    bot_username=getattr(context.bot, "username", None),
+                    bot_id,
+                    bot_username=bot_username,
                 )
                 return
             chat_type = incoming_message.chat.type if incoming_message.chat else ""
             is_private_chat = chat_type == "private"
-            bot_username = getattr(context.bot, "username", None)
             if not is_private_chat:
-                if not self._should_ai_reply_in_group(incoming_message, context.bot.id, bot_username):
+                if not self._should_ai_reply_in_group(incoming_message, bot_id, bot_username):
                     return
 
-            replied_message_context = self._build_replied_message_context(incoming_message, context.bot.id)
+            replied_message_context = self._build_replied_message_context(incoming_message, bot_id)
             user_content, user_context_text = await self.build_user_multimodal_content(
                 incoming_message,
                 bot_username=bot_username,
