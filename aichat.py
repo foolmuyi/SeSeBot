@@ -21,7 +21,7 @@ IMAGE_GENEDIT_API_KEY = os.getenv("IMAGE_GENEDIT_API_KEY", "").strip()
 IMAGE_GENEDIT_API_BASE_URL = "https://api.openai.com/v1"
 image_genedit_client = OpenAI(api_key=IMAGE_GENEDIT_API_KEY, base_url=IMAGE_GENEDIT_API_BASE_URL)
 # 纯文本对话模型（默认聊天）
-DEFAULT_MODEL = "grok-4.3"
+DEFAULT_MODEL = "grok-4.5"
 # 图片生成/编辑模型：支持纯文本生成，也可使用参考图进行编辑；留空表示关闭此能力。
 IMAGE_GENEDIT_MODEL = ""
 IMAGE_GENEDIT_SIZE = "1024x1024"

@@ -6,31 +6,85 @@ from http_utils import fetch_json, fetch_response
 
 
 base_url = 'https://jandan.net'
-headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'}
+headers = {
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'Referer': base_url + '/pic',
+}
 timeout = (3, 30)
 logger = logging.getLogger(__name__)
+pic_post_id = 26402
+max_pic_pages = 3
 
-def get_top_comments(filtered):
-    all_comments = {}
-    top_url = base_url + '/api/top/post/26402'
-    top_data = fetch_json(
+
+def get_comment_image_urls(comment):
+    img_urls = []
+    for image in comment.get('images') or []:
+        if isinstance(image, str) and image:
+            img_urls.append(image)
+        elif isinstance(image, dict):
+            img_url = image.get('url') or image.get('src')
+            if img_url:
+                img_urls.append(img_url)
+    if img_urls:
+        return img_urls
+
+    soup = BeautifulSoup(comment.get('content', ''), 'html.parser')
+    return [img['src'] for img in soup.find_all('img') if img.get('src')]
+
+
+def get_pic_comments():
+    comment_pages = []
+    latest_url = base_url + f'/api/comment/post/{pic_post_id}?order=desc&page=0'
+    latest_data = fetch_json(
         requests.get,
-        url=top_url,
+        url=latest_url,
         headers=headers,
         timeout=timeout,
         attempts=4,
-        error_message='Failed to fetch Jandan top comments',
+        error_message='Failed to fetch Jandan comments',
     )
-    comment_list = top_data.get('data')
-    if not isinstance(comment_list, list):
-        raise ValueError('Failed to fetch Jandan top comments: missing data')
-    for comment in comment_list:
+    if latest_data.get('code') != 0:
+        raise ValueError('Failed to fetch Jandan comments: ' + str(latest_data.get('msg', 'unknown error')))
+
+    latest_page = latest_data.get('data')
+    if not isinstance(latest_page, dict):
+        raise ValueError('Failed to fetch Jandan comments: missing data')
+
+    comment_pages.append(latest_page)
+    current_page = latest_page.get('current_page')
+    if isinstance(current_page, int):
+        for page in range(current_page - 1, max(current_page - max_pic_pages, 0), -1):
+            page_url = base_url + f'/api/comment/post/{pic_post_id}?order=desc&page={page}'
+            page_data = fetch_json(
+                requests.get,
+                url=page_url,
+                headers=headers,
+                timeout=timeout,
+                attempts=4,
+                error_message='Failed to fetch Jandan comments',
+            )
+            if page_data.get('code') != 0:
+                break
+            page_content = page_data.get('data')
+            if isinstance(page_content, dict):
+                comment_pages.append(page_content)
+
+    comments = []
+    for comment_page in comment_pages:
+        comment_list = comment_page.get('list')
+        if isinstance(comment_list, list):
+            comments.extend(comment_list)
+    return comments
+
+
+def get_top_comments(filtered):
+    all_comments = {}
+    for comment in get_pic_comments():
         comment_id = comment['id']
         if comment_id not in filtered:
-            all_comments[comment_id] = {}
-            soup = BeautifulSoup(comment['content'], 'html.parser')
-            img_urls = [img['src'] for img in soup.find_all('img') if img.get('src')]
-            all_comments[comment_id] = img_urls
+            img_urls = get_comment_image_urls(comment)
+            if img_urls:
+                all_comments[comment_id] = img_urls
     if all_comments:
         random_comment_id = random.choice(list(all_comments.keys()))
         random_comment = {'comment_id': random_comment_id,
@@ -39,6 +93,7 @@ def get_top_comments(filtered):
         return random_comment
     else:
         raise ValueError('真的一张都没有了！')
+
 
 def get_comment_img(img_url):
     logger.info("Downloading jandan image...")
@@ -51,6 +106,7 @@ def get_comment_img(img_url):
         error_message='Failed to download image',
     )
     return response.content
+
 
 def get_hot_sub_comments(comment_id):
     hot_sub_comments = ''
@@ -66,7 +122,7 @@ def get_hot_sub_comments(comment_id):
     )
     hot_sub_comments_list = sub_comments_data.get('hot_tucao')
     if not isinstance(hot_sub_comments_list, list):
-        raise ValueError('Failed to get comments: missing hot_tucao')
+        return ''
     for each in hot_sub_comments_list:
         soup = BeautifulSoup(each['comment_content'], 'html.parser')
         hot_sub_comments += soup.get_text()
