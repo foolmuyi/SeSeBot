@@ -20,6 +20,7 @@ from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
 from javdb import get_javdb_ranking, download_javdb_img, get_javdb_reviews, get_javdb_preview
 from shici import get_shici_card
 from bnalpha import check_alpha
+from youtube import CHANNEL_IDS, check_youtube
 from dotenv import load_dotenv
 from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -439,6 +440,29 @@ class TelegramBot:
         else:
             logger.info("No alpha news found.")
 
+    async def get_youtube_updates(self, context):
+        seen_by_channel = context.bot_data.setdefault("youtube_seen_urls", {})
+        for channel_id in dict.fromkeys(CHANNEL_IDS):
+            try:
+                videos = await asyncio.to_thread(check_youtube, channel_id)
+                if channel_id not in seen_by_channel:
+                    seen_by_channel[channel_id] = {video["url"] for video in videos}
+                    logger.info("YouTube channel initialized: %s", channel_id)
+                    continue
+                seen_urls = seen_by_channel[channel_id]
+                for video in videos:
+                    if video["url"] in seen_urls:
+                        continue
+                    await self.application.bot.send_message(
+                        chat_id=context.job.chat_id,
+                        text=video["msg"],
+                        parse_mode=None,
+                    )
+                    seen_urls.add(video["url"])
+                    logger.info("YouTube update delivered: %s", video["url"])
+            except Exception:
+                logger.exception("YouTube update check failed: %s", channel_id)
+
     @staticmethod
     def is_message_not_modified_error(exc):
         return "message is not modified" in str(exc).lower()
@@ -640,7 +664,6 @@ class TelegramBot:
                 {
                     "role": "system",
                     "content": (
-                        "你是一个在 Telegram 中与用户对话的 AI 助手。"
                         "默认使用简体中文，语言自然流畅，像真人一样，适当使用emoji。"
                         "不确定时要明确说明，不要编造事实。"
                         "当消息包含图片时，结合图片与文字一起回答。"
@@ -1351,6 +1374,14 @@ class TelegramBot:
             job_kwargs={"jitter": 32768},
         )
         self.application.job_queue.run_repeating(self.get_alpha_news, interval=300, chat_id=GROUP_CHAT_ID, name='scheduled news')
+        if CHANNEL_IDS:
+            self.application.job_queue.run_repeating(
+                self.get_youtube_updates,
+                interval=3600,
+                first=1,
+                chat_id=GROUP_CHAT_ID,
+                name='scheduled youtube',
+            )
         self.restore_pending_reminders()
 
     def run(self):
