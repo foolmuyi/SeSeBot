@@ -30,13 +30,14 @@ pip3 install -r requirements.txt
 
 ### YouTube channel monitoring
 Add channel IDs to `CHANNEL_IDS` in `youtube.py` (one ID per line; an empty list disables monitoring).
-The bot checks YouTube RSS feeds shortly after startup, then every hour, and sends new videos to `GROUP_CHAT_ID`:
+The bot uses `yt-dlp` to check the latest 15 entries in each channel's uploads playlist shortly after startup, then every hour. It only reads metadata, without downloading videos, and sends new videos to `GROUP_CHAT_ID`:
 ```text
 <频道名称>更新啦！
 <视频链接>
 ```
 The first successful check for each channel records existing videos without sending them.
 Tracking is kept in memory and resets on restart, so videos published while the bot is offline are not backfilled.
+Keep the extractor up to date with `pip install -U yt-dlp` when YouTube changes cause extraction failures.
 
 ## Usage
 #### Run in Terminal
