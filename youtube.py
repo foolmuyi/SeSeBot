@@ -9,7 +9,7 @@ CHANNEL_IDS = [
     "UCQVFsceiJZ3bs-SzE3YXCnw",
     "UC1QxOK5YpyAyFCN_xiPfgHw"
 ]
-MAX_VIDEOS = 15
+MAX_VIDEOS = 5
 logger = logging.getLogger(__name__)
 
 
@@ -18,10 +18,9 @@ def check_youtube(channel_id):
     channel_id = channel_id.strip()
     if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel_id):
         raise ValueError(f"Invalid YouTube channel ID: {channel_id}")
-    # A channel's UU playlist contains its uploads, including Shorts.
-    playlist_url = f"https://www.youtube.com/playlist?list=UU{channel_id[2:]}"
+    playlist_url = f"https://www.youtube.com/channel/{channel_id}/videos"
     options = {
-        "extract_flat": "in_playlist",
+        "extract_flat": True,
         "skip_download": True,
         "playlistend": MAX_VIDEOS,
         "socket_timeout": 30,
@@ -39,6 +38,9 @@ def check_youtube(channel_id):
     videos = []
     for entry in info["entries"]:
         if not entry:
+            continue
+        # Membership badges are exposed by yt-dlp as subscriber_only.
+        if entry.get("availability") in {"subscriber_only", "premium_only"}:
             continue
         video_id = entry.get("id") or ""
         channel_name = (

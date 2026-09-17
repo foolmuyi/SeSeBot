@@ -30,7 +30,7 @@ pip3 install -r requirements.txt
 
 ### YouTube channel monitoring
 Add channel IDs to `CHANNEL_IDS` in `youtube.py` (one ID per line; an empty list disables monitoring).
-The bot uses `yt-dlp` to check the latest 15 entries in each channel's uploads playlist shortly after startup, then every hour. It only reads metadata, without downloading videos, and sends new videos to `GROUP_CHAT_ID`:
+The bot uses `yt-dlp` to check the latest 5 entries in each channel's `/videos` tab shortly after startup, then every hour. Entries marked `subscriber_only` (members-only) or `premium_only` are excluded; entries without an availability label are retained. Shorts and Streams tabs are not checked. It only reads metadata, without downloading videos, and sends new videos to `GROUP_CHAT_ID`:
 ```text
 <频道名称>更新啦！
 <视频链接>
