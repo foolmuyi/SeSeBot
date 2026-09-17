@@ -442,7 +442,9 @@ class TelegramBot:
 
     async def get_youtube_updates(self, context):
         seen_by_channel = context.bot_data.setdefault("youtube_seen_urls", {})
-        for channel_id in dict.fromkeys(CHANNEL_IDS):
+        for index, channel_id in enumerate(dict.fromkeys(CHANNEL_IDS)):
+            if index:
+                await asyncio.sleep(10)
             try:
                 videos = await asyncio.to_thread(check_youtube, channel_id)
                 if channel_id not in seen_by_channel:
