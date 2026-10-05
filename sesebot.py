@@ -17,13 +17,13 @@ from aichat import (
     stream_ai_response,
 )
 from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
-from javdb import get_javdb_ranking, download_javdb_img, get_javdb_reviews, get_javdb_preview
+from javdb import get_javdb_ranking, download_javdb_img, download_javdb_imgs, get_javdb_reviews, get_javdb_preview
 from shici import get_shici_card
 from bnalpha import check_alpha
 from youtube import CHANNEL_IDS, check_youtube
 from dotenv import load_dotenv
 from PIL import Image
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.error import TimedOut, BadRequest, RetryAfter
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, CallbackQueryHandler
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -414,11 +414,44 @@ class TelegramBot:
             chat_id = str(update.effective_message.chat.id)
             await self.application.bot.send_message(chat_id=chat_id, text='我知道你很急，但你先别急...')
             image_urls = await asyncio.to_thread(get_javdb_preview, href)
-            for image_url in image_urls:
-                preview_image = await asyncio.to_thread(download_javdb_img, image_url)
-                filename = image_url.split("/")[-1]
-                await self.send_image_media(chat_id=chat_id, media_bytes=preview_image, filename=filename)
-                await asyncio.sleep(1.5)
+            pending_photos = []
+            last_media_sent = None
+
+            async def wait_for_media_slot():
+                if last_media_sent is not None:
+                    delay = 1.5 - (time.monotonic() - last_media_sent)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+
+            async def flush_photos():
+                nonlocal last_media_sent
+                if not pending_photos:
+                    return
+                await wait_for_media_slot()
+                if len(pending_photos) == 1:
+                    await self.application.bot.send_photo(chat_id=chat_id, photo=pending_photos[0])
+                else:
+                    await self.application.bot.send_media_group(
+                        chat_id=chat_id,
+                        media=[InputMediaPhoto(media=photo) for photo in pending_photos],
+                    )
+                pending_photos.clear()
+                last_media_sent = time.monotonic()
+
+            for offset in range(0, len(image_urls), 10):
+                batch_urls = image_urls[offset:offset + 10]
+                preview_images = await asyncio.to_thread(download_javdb_imgs, batch_urls)
+                for image_url, preview_image in zip(batch_urls, preview_images):
+                    if self.should_send_as_photo(preview_image):
+                        pending_photos.append(preview_image)
+                    else:
+                        # Documents cannot share a Telegram media group with photos.
+                        await flush_photos()
+                        await wait_for_media_slot()
+                        filename = image_url.split("/")[-1]
+                        await self.send_image_media(chat_id=chat_id, media_bytes=preview_image, filename=filename)
+                        last_media_sent = time.monotonic()
+                await flush_photos()
             logger.info("JavDB detail task finished")
         except Exception as e:
             logger.exception("get_javdb_details failed")
@@ -1370,10 +1403,10 @@ class TelegramBot:
         logger.info("Scheduler initialized")
         self.application.job_queue.run_repeating(
             self.job_wrapper,
-            interval=32768,
+            interval=65536,
             chat_id=GROUP_CHAT_ID,
             name='scheduled shici',
-            job_kwargs={"jitter": 32768},
+            job_kwargs={"jitter": 16384},
         )
         self.application.job_queue.run_repeating(self.get_alpha_news, interval=300, chat_id=GROUP_CHAT_ID, name='scheduled news')
         if CHANNEL_IDS:

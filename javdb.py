@@ -2,6 +2,7 @@ import os
 import re
 import random
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from curl_cffi import requests
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup, Tag
@@ -10,6 +11,7 @@ from http_utils import fetch_response
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+_PREVIEW_DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="javdb-preview")
 
 def download_javdb_img(url):
     logger.info("Downloading JavDB image...")
@@ -20,9 +22,14 @@ def download_javdb_img(url):
         attempts=4,
         timeout=(3, 30),
         error_message=f'Failed to download javdb image {name}',
+        retry_delay=2,
         impersonate="chrome",
     )
     return response.content
+
+def download_javdb_imgs(urls):
+    # Share the limit across simultaneous preview requests; map preserves order.
+    return list(_PREVIEW_DOWNLOAD_POOL.map(download_javdb_img, urls))
 
 def get_javdb_ranking(filtered):
     url = 'https://javdb.com/rankings/movies?p=daily&t=censored'
