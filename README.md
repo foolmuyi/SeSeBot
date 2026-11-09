@@ -56,6 +56,16 @@ Examples:
 #### Poetry command
 `/shici`
 
+#### Sticker to GIF
+Send a sticker directly to the bot in a private chat (whitelisted users only).
+Static WebP, animated TGS, and video WebM stickers are converted to a `sticker.gif` file.
+Static stickers produce a single-frame GIF; animations loop at up to 25 FPS, with a maximum size of 512 pixels.
+The GIF is sent as a document to preserve the actual GIF file rather than Telegram's MP4 animation conversion.
+Install the updated Python requirements for TGS support. WebM conversion also needs FFmpeg on the server:
+```Shell
+sudo apt install ffmpeg
+```
+
 #### Run as systemd service
 ```INI
 [Unit]

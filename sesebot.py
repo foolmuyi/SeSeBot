@@ -21,6 +21,7 @@ from javdb import get_javdb_ranking, download_javdb_img, download_javdb_imgs, ge
 from shici import get_shici_card
 from bnalpha import check_alpha
 from youtube import CHANNEL_IDS, check_youtube
+from sticker_gif import MAX_STICKER_BYTES, sticker_to_gif
 from dotenv import load_dotenv
 from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
@@ -42,6 +43,7 @@ class TelegramBot:
         self.filtered = {}
         self.aichat_contexts = {}
         self.pending_media_groups = {}
+        self.sticker_conversion_lock = asyncio.Semaphore(1)
         self.bot_id = None
         self.bot_username = None
         dir_path = os.path.dirname(os.path.abspath(__file__))
@@ -1341,6 +1343,31 @@ class TelegramBot:
         self.bot_username = getattr(bot_user, "username", None) or bot_username
         return self.bot_id, self.bot_username
 
+    async def handle_sticker(self, update, context):
+        message = update.effective_message
+        if not message or not message.sticker or message.chat.type != "private":
+            return
+        if not message.from_user or str(message.from_user.id) not in self.whitelist:
+            return
+        sticker = message.sticker
+        sticker_format = "tgs" if sticker.is_animated else "webm" if sticker.is_video else "webp"
+        try:
+            if sticker.file_size and sticker.file_size > MAX_STICKER_BYTES:
+                await message.reply_text("贴纸文件太大，请发送 8MB 以内的贴纸。")
+                return
+            async with self.sticker_conversion_lock:
+                await context.bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
+                tg_file = await sticker.get_file()
+                sticker_bytes = await self._download_file_bytes(tg_file)
+                gif_bytes = await sticker_to_gif(sticker_bytes, sticker_format)
+            # Return the actual GIF file; send_animation can transcode it to MP4.
+            await message.reply_document(
+                document=gif_bytes, filename="sticker.gif", disable_content_type_detection=True,
+            )
+        except Exception as exc:
+            logger.exception("Sticker to GIF conversion failed")
+            await message.reply_text(f"贴纸转 GIF 失败：{exc}")
+
     async def handle_message(self, update, context):
         incoming_message = update.effective_message
         if not incoming_message or not incoming_message.from_user:
@@ -1392,6 +1419,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler('remind', self.remind_command))
         self.application.add_handler(CommandHandler('ping', self.ping_command))
         self.application.add_handler(CallbackQueryHandler(self.javdb_button))
+        self.application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.Sticker.ALL, self.handle_sticker))
         ai_chat_filters = (filters.TEXT | filters.PHOTO | filters.Document.ALL) & (~filters.COMMAND)
         self.application.add_handler(MessageHandler(ai_chat_filters, self.handle_message))
 
