@@ -19,9 +19,6 @@ pip3 install -r requirements.txt
   -  `GROUP_CHAT_ID`: the `chat_id` of your Telegram group
   -  `BOT_TIMEZONE` (optional): timezone for reminders, default `Asia/Shanghai`
   -  `LOG_LEVEL` (optional): logging level, default `INFO`
-  -  `PIXIV_COOKIE`: your Pixiv cookie
-  -  `CF_PIXIV_URL`: your Pixiv Cloudflare worker url
-  -  `CF_PIXIV_KEY`: your Pixiv Cloudflare worker authentication key
   -  LLM API key from Grok, OpenAI or any other provider
 - To enable image generation/editing, set these code-level constants:
   - `IMAGE_GENEDIT_MODEL` for image generation/editing (text -> image, or image+text -> image; empty string means disabled)

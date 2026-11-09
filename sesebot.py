@@ -9,7 +9,6 @@ import uuid
 import logging
 from collections import deque
 from datetime import datetime
-from pixiv import download_pixiv_img, get_pixiv_ranking
 from aichat import (
     ImageGenEditNotConfiguredError,
     run_image_genedit,
@@ -256,26 +255,6 @@ class TelegramBot:
         if filename:
             document_kwargs["filename"] = filename
         await self.application.bot.send_document(**document_kwargs)
-
-    async def get_pixiv_imgs(self, update, mode):
-        await update.effective_message.reply_text('我知道你很急，但你先别急！')
-        try:
-            logger.info("Pixiv task started")
-            chat_id = str(update.effective_message.chat.id)
-            filtered_bucket = self.get_filtered_bucket(chat_id)
-            msg = await asyncio.to_thread(get_pixiv_ranking, mode, filtered_bucket, 2)
-            artworks_url = msg['artworks_url']
-            artworks_id = artworks_url.split("/")[-1]
-            filtered_bucket.append(artworks_id)
-            for img_url in msg['imgs_url']:
-                img = await asyncio.to_thread(download_pixiv_img, img_url, artworks_url)
-                filename = img_url.split("/")[-1]
-                await self.send_image_media(chat_id=chat_id, media_bytes=img, filename=filename)
-            await update.effective_message.reply_text(artworks_url)
-            logger.info("Pixiv task finished")
-        except Exception as e:
-            logger.exception("get_pixiv_imgs failed")
-            await update.effective_message.reply_text('Error:\n' + str(e))
 
     async def get_jandan_imgs(self, update, context):
         if update:
@@ -1122,15 +1101,6 @@ class TelegramBot:
         self.aichat_contexts[chat_id] = []
 
     @check_access
-    async def pixiv_command(self, update, context):
-        logger.info("Command /pixiv triggered")
-        try:
-            await self.get_pixiv_imgs(update, 'daily_r18')
-        except Exception as e:
-            logger.exception("pixiv_command failed")
-            await update.effective_message.reply_text('Error:\n' + str(e))
-
-    @check_access
     async def javdb_command(self, update, context):
         logger.info("Command /javdb triggered")
         try:
@@ -1351,10 +1321,15 @@ class TelegramBot:
             return
         sticker = message.sticker
         sticker_format = "tgs" if sticker.is_animated else "webm" if sticker.is_video else "webp"
+        status_reply = None
         try:
             if sticker.file_size and sticker.file_size > MAX_STICKER_BYTES:
                 await message.reply_text("贴纸文件太大，请发送 8MB 以内的贴纸。")
                 return
+            try:
+                status_reply = await message.reply_text("正在将贴纸转换为 GIF，请稍候...")
+            except Exception:
+                logger.warning("Failed to send sticker conversion status", exc_info=True)
             async with self.sticker_conversion_lock:
                 await context.bot.send_chat_action(chat_id=message.chat.id, action="upload_document")
                 tg_file = await sticker.get_file()
@@ -1366,7 +1341,24 @@ class TelegramBot:
             )
         except Exception as exc:
             logger.exception("Sticker to GIF conversion failed")
-            await message.reply_text(f"贴纸转 GIF 失败：{exc}")
+            error_text = f"贴纸转 GIF 失败：{exc}"
+            if status_reply:
+                try:
+                    await status_reply.edit_text(error_text)
+                    return
+                except Exception:
+                    logger.warning("Failed to update sticker conversion status", exc_info=True)
+            await message.reply_text(error_text)
+        else:
+            if status_reply:
+                try:
+                    await status_reply.delete()
+                except Exception:
+                    logger.warning("Failed to delete sticker conversion status", exc_info=True)
+                    try:
+                        await status_reply.edit_text("转换完成，GIF 已发送。")
+                    except Exception:
+                        logger.warning("Failed to update sticker conversion status", exc_info=True)
 
     async def handle_message(self, update, context):
         incoming_message = update.effective_message
@@ -1411,7 +1403,6 @@ class TelegramBot:
 
     def add_handlers(self):
         self.application.add_handler(CommandHandler('start', self.start_command))
-        self.application.add_handler(CommandHandler('pixiv', self.pixiv_command))
         self.application.add_handler(CommandHandler('javdb', self.javdb_command))
         self.application.add_handler(CommandHandler('jandan', self.jandan_command))
         self.application.add_handler(CommandHandler('shici', self.shici_command))
