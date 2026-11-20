@@ -25,6 +25,8 @@ pip3 install -r requirements.txt
   - Optional: `IMAGE_GENEDIT_SIZE`, `IMAGE_GENEDIT_QUALITY`, `IMAGE_GENEDIT_STYLE`, `IMAGE_GENEDIT_RESPONSE_FORMAT`
 - Create `whitelist.json` and fill it with the Telegram `chat_id` of yourself and your friends.
 
+Configure `API_KEY`, `API_BASE_URL` and `DEFAULT_MODEL` in `aichat.py` for your provider's Chat Completions API. For Gemini, use `https://generativelanguage.googleapis.com/v1beta/openai/` as `API_BASE_URL`, read your Gemini key in `API_KEY`, and set `DEFAULT_MODEL` to your Gemini model ID.
+
 ### YouTube channel monitoring
 Add channel IDs to `CHANNEL_IDS` in `youtube.py` (one ID per line; an empty list disables monitoring).
 The bot uses `yt-dlp` to check the latest 5 entries in each channel's `/videos` tab shortly after startup, then every hour. Entries marked `subscriber_only` (members-only) or `premium_only` are excluded; entries without an availability label are retained. Shorts and Streams tabs are not checked. It only reads metadata, without downloading videos, and sends new videos to `GROUP_CHAT_ID`:

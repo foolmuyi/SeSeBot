@@ -8,7 +8,7 @@ import time
 import logging
 from collections import OrderedDict
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI, omit
 import requests
 
 load_dotenv()
@@ -19,7 +19,9 @@ client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 # 图片生成/编辑允许单独走 OpenAI 兼容配置，不影响聊天模型通道。
 IMAGE_GENEDIT_API_KEY = os.getenv("IMAGE_GENEDIT_API_KEY", "").strip()
 IMAGE_GENEDIT_API_BASE_URL = "https://api.openai.com/v1"
-image_genedit_client = OpenAI(api_key=IMAGE_GENEDIT_API_KEY, base_url=IMAGE_GENEDIT_API_BASE_URL)
+image_genedit_client = None
+if IMAGE_GENEDIT_API_KEY:
+    image_genedit_client = OpenAI(api_key=IMAGE_GENEDIT_API_KEY, base_url=IMAGE_GENEDIT_API_BASE_URL)
 # 纯文本对话模型（默认聊天）
 DEFAULT_MODEL = "grok-4.7"
 # 图片生成/编辑模型：支持纯文本生成，也可使用参考图进行编辑；留空表示关闭此能力。
@@ -33,9 +35,6 @@ IMAGE_GENEDIT_DOWNLOAD_TIMEOUT_SECONDS = 30.0
 IMAGE_GENEDIT_MAX_INPUT_IMAGES = 16
 EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip()
 EXA_SEARCH_ENDPOINT = os.getenv("EXA_SEARCH_ENDPOINT", "https://api.exa.ai/search").strip()
-# 预留给 Responses API 的 tools，后续可直接填入 web_search/function 等定义。
-RESPONSE_TOOLS = []
-RESPONSE_TOOL_CHOICE = None
 logger = logging.getLogger(__name__)
 
 
@@ -82,13 +81,13 @@ EXA_MAX_RESULTS = _parse_int_env("EXA_MAX_RESULTS", 5, min_value=1, max_value=10
 EXA_QUERY_MAX_CHARS = _parse_int_env("EXA_QUERY_MAX_CHARS", 300, min_value=50, max_value=1200)
 EXA_SNIPPET_MAX_CHARS = _parse_int_env("EXA_SNIPPET_MAX_CHARS", 220, min_value=80, max_value=1200)
 EXA_DECISION_MODEL = os.getenv("EXA_DECISION_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-EXA_DECISION_MAX_OUTPUT_TOKENS = _parse_int_env("EXA_DECISION_MAX_OUTPUT_TOKENS", 24, min_value=8, max_value=128)
+EXA_DECISION_MAX_OUTPUT_TOKENS = _parse_int_env("EXA_DECISION_MAX_OUTPUT_TOKENS", 0, min_value=0, max_value=65536)
 EXA_DECISION_CONTEXT_MESSAGES = _parse_int_env("EXA_DECISION_CONTEXT_MESSAGES", 6, min_value=2, max_value=20)
 EXA_DECISION_TEXT_MAX_CHARS = _parse_int_env("EXA_DECISION_TEXT_MAX_CHARS", 320, min_value=100, max_value=1200)
 EXA_DECISION_CACHE_TTL_SECONDS = _parse_float_env("EXA_DECISION_CACHE_TTL_SECONDS", 600.0, min_value=30.0, max_value=86400.0)
 EXA_DECISION_CACHE_MAX_SIZE = _parse_int_env("EXA_DECISION_CACHE_MAX_SIZE", 256, min_value=32, max_value=2048)
 REMINDER_PARSE_MODEL = os.getenv("REMINDER_PARSE_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-REMINDER_PARSE_MAX_OUTPUT_TOKENS = _parse_int_env("REMINDER_PARSE_MAX_OUTPUT_TOKENS", 120, min_value=64, max_value=256)
+REMINDER_PARSE_MAX_OUTPUT_TOKENS = _parse_int_env("REMINDER_PARSE_MAX_OUTPUT_TOKENS", 0, min_value=0, max_value=65536)
 
 _EXA_DECISION_CACHE = OrderedDict()
 _EXA_DECISION_CACHE_LOCK = threading.Lock()
@@ -122,33 +121,9 @@ def _extract_text_from_content(content):
     return str(content)
 
 
-def _content_to_responses_parts(content):
-    if isinstance(content, str):
-        return [{"type": "input_text", "text": content}]
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            item_type = item.get("type")
-            if item_type == "text":
-                text = item.get("text", "")
-                if text:
-                    parts.append({"type": "input_text", "text": text})
-            elif item_type == "image_url":
-                image_url = item.get("image_url")
-                if isinstance(image_url, dict):
-                    image_url = image_url.get("url")
-                if image_url:
-                    parts.append({"type": "input_image", "image_url": image_url})
-        if parts:
-            return parts
-    return [{"type": "input_text", "text": str(content)}]
-
-
-def _build_responses_payload(messages):
+def _build_chat_messages(messages):
     instructions = []
-    input_items = []
+    conversation = []
     for message in messages:
         role = message.get("role", "user")
         content = message.get("content", "")
@@ -159,38 +134,21 @@ def _build_responses_payload(messages):
             continue
         if role not in ("user", "assistant", "developer"):
             role = "user"
-        input_items.append({"role": role, "content": _content_to_responses_parts(content)})
-    final_instructions = "\n\n".join(instructions) if instructions else None
-    return final_instructions, input_items
-
-
-def _stream_with_responses_api(model_name, user_message):
-    instructions, input_items = _build_responses_payload(user_message)
-    request_kwargs = {
-        "model": model_name,
-        "input": input_items,
-        "stream": True
-    }
+        conversation.append({"role": role, "content": content})
     if instructions:
-        request_kwargs["instructions"] = instructions
-    request_kwargs["tools"] = RESPONSE_TOOLS
-    if RESPONSE_TOOL_CHOICE is not None:
-        request_kwargs["tool_choice"] = RESPONSE_TOOL_CHOICE
-
-    stream = client.responses.create(**request_kwargs)
-    for event in stream:
-        event_type = getattr(event, "type", "")
-        if event_type == "response.output_text.delta":
-            delta = getattr(event, "delta", "")
-            if delta:
-                yield delta
-        elif event_type == "error":
-            error_obj = getattr(event, "error", None)
-            raise RuntimeError(f"Responses API stream error: {error_obj or event}")
+        conversation.insert(0, {"role": "system", "content": "\n\n".join(instructions)})
+    return conversation
 
 
 def _stream_response_by_model(model_name, user_message):
-    yield from _stream_with_responses_api(model_name, user_message)
+    messages = _build_chat_messages(user_message)
+    with client.chat.completions.create(model=model_name, messages=messages, stream=True) as stream:
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            text = chunk.choices[0].delta.content
+            if text:
+                yield text
 
 
 def _normalize_whitespace(text):
@@ -479,36 +437,6 @@ def run_image_genedit(prompt, image_urls=None, size=None, quality=None):
     }
 
 
-def _extract_response_output_text(response_obj):
-    output_text = getattr(response_obj, "output_text", None)
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text.strip()
-
-    output_items = getattr(response_obj, "output", None)
-    if isinstance(output_items, list):
-        parts = []
-        for item in output_items:
-            content_items = getattr(item, "content", None)
-            if content_items is None and isinstance(item, dict):
-                content_items = item.get("content")
-            if not isinstance(content_items, list):
-                continue
-            for content_item in content_items:
-                item_type = getattr(content_item, "type", None)
-                if item_type is None and isinstance(content_item, dict):
-                    item_type = content_item.get("type")
-                if item_type not in {"output_text", "text"}:
-                    continue
-                text = getattr(content_item, "text", None)
-                if text is None and isinstance(content_item, dict):
-                    text = content_item.get("text")
-                if isinstance(text, str) and text:
-                    parts.append(text)
-        if parts:
-            return "".join(parts).strip()
-    return ""
-
-
 def _parse_json_object(raw_text):
     if not raw_text:
         return None
@@ -554,13 +482,15 @@ def parse_reminder_request(text, now_text, timezone_name):
         f"用户原话: {text}\n"
         "请返回 JSON。"
     )
-    response = client.responses.create(
+    response = client.chat.completions.create(
         model=REMINDER_PARSE_MODEL,
-        input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
-        instructions=instructions,
-        max_output_tokens=REMINDER_PARSE_MAX_OUTPUT_TOKENS,
+        messages=[
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=REMINDER_PARSE_MAX_OUTPUT_TOKENS or omit,
     )
-    raw_text = _extract_response_output_text(response)
+    raw_text = (response.choices[0].message.content or "").strip()
     parsed = _parse_json_object(raw_text)
     if not parsed:
         return {
@@ -636,13 +566,15 @@ def _should_use_exa_by_model(messages, query):
     decision_prompt_lines.append(f"Latest user query: {query}")
     decision_prompt = "\n".join(decision_prompt_lines)
 
-    response = client.responses.create(
+    response = client.chat.completions.create(
         model=EXA_DECISION_MODEL,
-        input=[{"role": "user", "content": [{"type": "input_text", "text": decision_prompt}]}],
-        instructions=decision_instructions,
-        max_output_tokens=EXA_DECISION_MAX_OUTPUT_TOKENS,
+        messages=[
+            {"role": "system", "content": decision_instructions},
+            {"role": "user", "content": decision_prompt},
+        ],
+        max_tokens=EXA_DECISION_MAX_OUTPUT_TOKENS or omit,
     )
-    raw_text = _extract_response_output_text(response)
+    raw_text = (response.choices[0].message.content or "").strip()
     decision = _parse_need_search(raw_text)
     if decision is None:
         decision = False
