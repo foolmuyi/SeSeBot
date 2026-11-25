@@ -16,7 +16,7 @@ from aichat import (
     stream_ai_response,
 )
 from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
-from javdb import get_javdb_ranking, download_javdb_img, download_javdb_imgs, get_javdb_reviews, get_javdb_preview
+from javdb import JavdbLoginRequiredError, get_javdb_ranking, download_javdb_img, download_javdb_imgs, get_javdb_reviews, get_javdb_preview
 from shici import get_shici_card
 from bnalpha import check_alpha
 from youtube import CHANNEL_IDS, check_youtube
@@ -372,7 +372,13 @@ class TelegramBot:
             movie_cover = await asyncio.to_thread(download_javdb_img, movie_cover_url)
             filename = movie_cover_url.split("/")[-1]
             await self.send_image_media(chat_id=chat_id, media_bytes=movie_cover, filename=filename)
-            movie_reviews = await asyncio.to_thread(get_javdb_reviews, msg['href'])
+            try:
+                movie_reviews = await asyncio.to_thread(get_javdb_reviews, msg['href'])
+            except ValueError as exc:
+                logger.warning("JavDB reviews unavailable: %s", exc)
+                movie_reviews = []
+                notice = str(exc) if isinstance(exc, JavdbLoginRequiredError) else '短评暂时无法获取，请稍后再试。'
+                movie_info_msg += f'\n{notice}\n'
             if movie_reviews:
                 for each in movie_reviews:
                     movie_info_msg += f"\n{each['stars']}  {each['time']}\n{each['comment']}"

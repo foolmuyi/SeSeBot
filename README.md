@@ -19,6 +19,7 @@ pip3 install -r requirements.txt
   -  `GROUP_CHAT_ID`: the `chat_id` of your Telegram group
   -  `BOT_TIMEZONE` (optional): timezone for reminders, default `Asia/Shanghai`
   -  `LOG_LEVEL` (optional): logging level, default `INFO`
+  -  `JAVDB_COOKIE` (optional): browser login cookies for JavDB reviews; see below
   -  LLM API key from Grok, OpenAI or any other provider
 - To enable image generation/editing, set these code-level constants:
   - `IMAGE_GENEDIT_MODEL` for image generation/editing (text -> image, or image+text -> image; empty string means disabled)
@@ -26,6 +27,13 @@ pip3 install -r requirements.txt
 - Create `whitelist.json` and fill it with the Telegram `chat_id` of yourself and your friends.
 
 Configure `API_KEY`, `API_BASE_URL` and `DEFAULT_MODEL` in `aichat.py` for your provider's Chat Completions API. For Gemini, use `https://generativelanguage.googleapis.com/v1beta/openai/` as `API_BASE_URL`, read your Gemini key in `API_KEY`, and set `DEFAULT_MODEL` to your Gemini model ID.
+
+### JavDB reviews
+JavDB requires login to read reviews. Sign in at `https://javdb.com`, open the browser's developer tools **Network** tab, and copy the **Cookie** request header from a JavDB request that successfully loads reviews. Put its value in the server's `.env`, then restart the bot:
+```dotenv
+JAVDB_COOKIE='name=value; another_name=value'
+```
+Use the actual header value in place of the example. Keep it private; it grants access to your logged-in session. The bot sends these cookies only with review requests to JavDB. If the session expires, update the value and restart again. Without a valid session, the bot still sends the cover, movie information, and buttons, with a notice that reviews require login.
 
 ### YouTube channel monitoring
 Add channel IDs to `CHANNEL_IDS` in `youtube.py` (one ID per line; an empty list disables monitoring).

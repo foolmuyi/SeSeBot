@@ -3,6 +3,8 @@ import re
 import random
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from http.cookies import CookieError, SimpleCookie
+from urllib.parse import urlsplit
 from curl_cffi import requests
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup, Tag
@@ -12,6 +14,28 @@ from http_utils import fetch_response
 load_dotenv()
 logger = logging.getLogger(__name__)
 _PREVIEW_DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="javdb-preview")
+
+
+class JavdbLoginRequiredError(ValueError):
+    pass
+
+
+def _get_review_cookies():
+    cookies = requests.Cookies()
+    cookie_header = os.getenv('JAVDB_COOKIE', '').strip()
+    if not cookie_header:
+        return cookies
+    parsed = SimpleCookie()
+    try:
+        parsed.load(cookie_header)
+    except CookieError:
+        raise ValueError('JAVDB_COOKIE 格式无效，请填写浏览器请求中的 Cookie 值。') from None
+    if not parsed:
+        raise ValueError('JAVDB_COOKIE 格式无效，请填写浏览器请求中的 Cookie 值。')
+    for name, morsel in parsed.items():
+        cookies.set(name, morsel.value, domain='javdb.com', path='/', secure=True)
+    return cookies
+
 
 def download_javdb_img(url):
     logger.info("Downloading JavDB image...")
@@ -97,11 +121,16 @@ def get_javdb_preview(href):
     raise ValueError("Failed to get javdb preview image urls.")
 
 def get_javdb_reviews(href):
-    movie_url = 'https://javdb.com' + href.rstrip('/')
-    url = movie_url + '/reviews/lastest'
+    movie_match = re.fullmatch(r'/v/([A-Za-z0-9]+)', urlsplit(href).path.rstrip('/'))
+    if not movie_match:
+        raise ValueError('Invalid JavDB movie URL')
+    movie_url = 'https://javdb.com/v/' + movie_match.group(1)
+    cookies = _get_review_cookies()
+    if not cookies:
+        raise JavdbLoginRequiredError('JavDB 评论需要登录，尚未配置登录状态。')
     res = fetch_response(
         requests.get,
-        url=url,
+        url=movie_url + '/reviews/lastest',
         attempts=4,
         timeout=(3, 30),
         error_message='Failed to fetch JavDB reviews',
@@ -109,7 +138,10 @@ def get_javdb_reviews(href):
         headers={
             'Referer': movie_url,
         },
+        cookies=cookies,
     )
+    if urlsplit(res.url).path.rstrip('/') in ('/login', '/sign_in', '/users/sign_in'):
+        raise JavdbLoginRequiredError('JavDB 登录状态已过期，请更新后重试。')
     soup = BeautifulSoup(res.text, 'html.parser')
     # Review fragments may omit ids; the "more reviews" row shares this class.
     items = soup.select('dt.review-item:not(.more)')
@@ -130,8 +162,10 @@ def get_javdb_reviews(href):
             "comment": comment
         })
     if not results:
-        if soup.select_one('form[action*="/login"], form[action*="/sign_in"]'):
-            raise ValueError('Failed to fetch JavDB reviews: login required')
+        if soup.select_one('form[action*="/login"], form[action*="/sign_in"]') or (
+            'This content requires login to view' in soup.get_text(' ', strip=True)
+        ):
+            raise JavdbLoginRequiredError('JavDB 登录状态已过期，请更新后重试。')
         if soup.select_one('#challenge-form, #challenge-running') or (
             soup.title and 'Just a moment' in soup.title.get_text()
         ):
