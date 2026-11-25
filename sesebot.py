@@ -16,7 +16,7 @@ from aichat import (
     stream_ai_response,
 )
 from jandan import get_top_comments, get_comment_img, get_hot_sub_comments
-from javdb import JavdbLoginRequiredError, get_javdb_ranking, download_javdb_img, download_javdb_imgs, get_javdb_reviews, get_javdb_preview
+from javdb import JavdbLoginRequiredError, get_javdb_ranking, download_javdb_img, download_javdb_imgs, get_javdb_reviews, get_javdb_preview, refresh_javdb_session
 from shici import get_shici_card
 from bnalpha import check_alpha
 from youtube import CHANNEL_IDS, check_youtube
@@ -1423,6 +1423,12 @@ class TelegramBot:
     async def job_wrapper(self, context):
         await self.get_shici_image(update=None, context=context)
 
+    async def refresh_javdb_login(self, context):
+        try:
+            await asyncio.to_thread(refresh_javdb_session)
+        except ValueError as exc:
+            logger.warning('JavDB session keepalive failed: %s', exc)
+
     def set_scheduler(self):
         GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
         logger.info("Scheduler initialized")
@@ -1441,6 +1447,13 @@ class TelegramBot:
                 first=1,
                 chat_id=GROUP_CHAT_ID,
                 name='scheduled youtube',
+            )
+        if os.getenv('JAVDB_COOKIE', '').strip():
+            self.application.job_queue.run_repeating(
+                self.refresh_javdb_login,
+                interval=3600,
+                first=60,
+                name='scheduled javdb login',
             )
         self.restore_pending_reminders()
 

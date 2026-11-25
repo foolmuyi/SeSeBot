@@ -2,18 +2,24 @@ import os
 import re
 import random
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
+from email.utils import parsedate_to_datetime
 from http.cookies import CookieError, SimpleCookie
+from threading import Lock
 from urllib.parse import urlsplit
 from curl_cffi import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from bs4 import BeautifulSoup, Tag
 from http_utils import fetch_response
 
 
-load_dotenv()
+_JAVDB_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+load_dotenv(_JAVDB_ENV_PATH)
 logger = logging.getLogger(__name__)
 _PREVIEW_DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="javdb-preview")
+_REVIEW_COOKIE_LOCK = Lock()
+_LAST_REVIEW_HREF = '/v/8w7Da'
 
 
 class JavdbLoginRequiredError(ValueError):
@@ -35,6 +41,55 @@ def _get_review_cookies():
     for name, morsel in parsed.items():
         cookies.set(name, morsel.value, domain='javdb.com', path='/', secure=True)
     return cookies
+
+
+def _save_refreshed_review_cookie(response, request_cookies):
+    response_url = urlsplit(response.url)
+    if response_url.scheme != 'https' or response_url.hostname != 'javdb.com':
+        return
+    headers = getattr(response, 'headers', None)
+    if headers is None:
+        return
+    # curl_cffi 0.14's response.cookies omits expiry and leaves host-only domains
+    # empty. Read Set-Cookie directly to preserve those attributes.
+    for header in headers.get_list('set-cookie'):
+        parsed = SimpleCookie()
+        try:
+            parsed.load(header)
+        except CookieError:
+            continue
+        cookie = parsed.get('_jdb_session')
+        if cookie is None or not cookie.value:
+            continue
+        domain = (cookie['domain'] or response_url.hostname).lstrip('.').lower()
+        if domain != 'javdb.com' or cookie['path'] != '/':
+            continue
+        try:
+            if cookie['max-age']:
+                if int(cookie['max-age']) <= 0:
+                    continue
+            elif cookie['expires'] and parsedate_to_datetime(cookie['expires']).timestamp() <= time.time():
+                continue
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if cookie.value == request_cookies.get('_jdb_session'):
+            return
+        updated = SimpleCookie({item.name: item.value for item in request_cookies.jar})
+        updated['_jdb_session'] = cookie.value
+        cookie_header = '; '.join(item.OutputString() for item in updated.values())
+        os.environ['JAVDB_COOKIE'] = cookie_header
+        try:
+            set_key(_JAVDB_ENV_PATH, 'JAVDB_COOKIE', cookie_header)
+        except OSError:
+            logger.warning('Could not save refreshed JavDB cookie to .env; keeping it in memory')
+        else:
+            logger.info('JavDB login cookie refreshed and saved')
+        return
+
+
+def refresh_javdb_session():
+    if os.getenv('JAVDB_COOKIE', '').strip():
+        get_javdb_reviews(_LAST_REVIEW_HREF)
 
 
 def download_javdb_img(url):
@@ -121,6 +176,13 @@ def get_javdb_preview(href):
     raise ValueError("Failed to get javdb preview image urls.")
 
 def get_javdb_reviews(href):
+    # Serialize reads and cookie rotation so parallel commands cannot save stale cookies.
+    with _REVIEW_COOKIE_LOCK:
+        return _get_javdb_reviews(href)
+
+
+def _get_javdb_reviews(href):
+    global _LAST_REVIEW_HREF
     movie_match = re.fullmatch(r'/v/([A-Za-z0-9]+)', urlsplit(href).path.rstrip('/'))
     if not movie_match:
         raise ValueError('Invalid JavDB movie URL')
@@ -141,7 +203,7 @@ def get_javdb_reviews(href):
         cookies=cookies,
     )
     if urlsplit(res.url).path.rstrip('/') in ('/login', '/sign_in', '/users/sign_in'):
-        raise JavdbLoginRequiredError('JavDB 登录状态已过期，请更新后重试。')
+        raise JavdbLoginRequiredError('JavDB 未接受当前登录状态，请更新 Cookie 后重试。')
     soup = BeautifulSoup(res.text, 'html.parser')
     # Review fragments may omit ids; the "more reviews" row shares this class.
     items = soup.select('dt.review-item:not(.more)')
@@ -165,9 +227,12 @@ def get_javdb_reviews(href):
         if soup.select_one('form[action*="/login"], form[action*="/sign_in"]') or (
             'This content requires login to view' in soup.get_text(' ', strip=True)
         ):
-            raise JavdbLoginRequiredError('JavDB 登录状态已过期，请更新后重试。')
+            raise JavdbLoginRequiredError('JavDB 未接受当前登录状态，请更新 Cookie 后重试。')
         if soup.select_one('#challenge-form, #challenge-running') or (
             soup.title and 'Just a moment' in soup.title.get_text()
         ):
             raise ValueError('Failed to fetch JavDB reviews: Cloudflare verification required')
+    if results:
+        _save_refreshed_review_cookie(res, cookies)
+        _LAST_REVIEW_HREF = '/v/' + movie_match.group(1)
     return results

@@ -33,7 +33,9 @@ JavDB requires login to read reviews. Sign in at `https://javdb.com`, open the b
 ```dotenv
 JAVDB_COOKIE='name=value; another_name=value'
 ```
-Use the actual header value in place of the example. Keep it private; it grants access to your logged-in session. The bot sends these cookies only with review requests to JavDB. If the session expires, update the value and restart again. Without a valid session, the bot still sends the cover, movie information, and buttons, with a notice that reviews require login.
+Use the actual header value in place of the example. Keep it private; it grants access to your logged-in session. The bot sends these cookies only with review requests to JavDB. After a successful review response, any new `_jdb_session` cookie issued by JavDB is used immediately and saved back to `.env`; the bot's service user therefore needs write access to that file. Other cookies and environment settings are preserved.
+
+With `JAVDB_COOKIE` configured, a background keepalive reads reviews once an hour, starting one minute after startup. It uses the last successfully requested movie, or `/v/8w7Da` until the first successful request. This can extend the session only if JavDB renews it during requests; it cannot restore a revoked or expired login. A redirect to the login page means the current cookie was not accepted, which does not establish whether it expired or was invalidated for another reason. If this happens, update `JAVDB_COOKIE` from a working browser session and restart. The bot still sends the cover, movie information, and buttons when reviews are unavailable.
 
 ### YouTube channel monitoring
 Add channel IDs to `CHANNEL_IDS` in `youtube.py` (one ID per line; an empty list disables monitoring).
