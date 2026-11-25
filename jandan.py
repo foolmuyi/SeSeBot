@@ -14,6 +14,7 @@ timeout = (3, 30)
 logger = logging.getLogger(__name__)
 pic_post_id = 26402
 max_pic_pages = 3
+max_fallback_sub_comments = 3
 
 
 def get_comment_image_urls(comment):
@@ -120,13 +121,28 @@ def get_hot_sub_comments(comment_id):
         attempts=4,
         error_message='Failed to get comments',
     )
+    if not isinstance(sub_comments_data, dict) or sub_comments_data.get('code') != 0:
+        message = sub_comments_data.get('msg', 'invalid response') if isinstance(sub_comments_data, dict) else 'invalid response'
+        raise ValueError('Failed to get comments: ' + str(message))
+
     hot_sub_comments_list = sub_comments_data.get('hot_tucao')
-    if not isinstance(hot_sub_comments_list, list):
-        return ''
+    if not isinstance(hot_sub_comments_list, list) or not hot_sub_comments_list:
+        sub_comments = sub_comments_data.get('tucao')
+        if not isinstance(sub_comments, list):
+            raise ValueError('Failed to get comments: missing tucao')
+        # Recent pictures often have replies that have not reached the hot threshold.
+        hot_sub_comments_list = sorted(
+            sub_comments,
+            key=lambda comment: (comment.get('vote_positive') or 0) - (comment.get('vote_negative') or 0),
+            reverse=True,
+        )[:max_fallback_sub_comments]
     for each in hot_sub_comments_list:
-        soup = BeautifulSoup(each['comment_content'], 'html.parser')
-        hot_sub_comments += soup.get_text()
-        hot_sub_comments += f'    ⭕⭕[{each["vote_positive"]}]'
-        hot_sub_comments += f'    ❌❌[{each["vote_negative"]}]'
+        soup = BeautifulSoup(each.get('comment_content') or '', 'html.parser')
+        text = soup.get_text(' ', strip=True)
+        if not text:
+            continue
+        hot_sub_comments += text
+        hot_sub_comments += f'    ⭕⭕[{each.get("vote_positive") or 0}]'
+        hot_sub_comments += f'    ❌❌[{each.get("vote_negative") or 0}]'
         hot_sub_comments += '\n'
     return hot_sub_comments

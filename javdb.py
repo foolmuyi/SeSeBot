@@ -97,7 +97,8 @@ def get_javdb_preview(href):
     raise ValueError("Failed to get javdb preview image urls.")
 
 def get_javdb_reviews(href):
-    url = 'https://javdb.com' + href + '/reviews/lastest'
+    movie_url = 'https://javdb.com' + href.rstrip('/')
+    url = movie_url + '/reviews/lastest'
     res = fetch_response(
         requests.get,
         url=url,
@@ -105,17 +106,34 @@ def get_javdb_reviews(href):
         timeout=(3, 30),
         error_message='Failed to fetch JavDB reviews',
         impersonate="chrome",
+        headers={
+            'Referer': movie_url,
+        },
     )
     soup = BeautifulSoup(res.text, 'html.parser')
-    items = soup.select("dt.review-item[id]")
+    # Review fragments may omit ids; the "more reviews" row shares this class.
+    items = soup.select('dt.review-item:not(.more)')
     results = []
     for item in items:
-        stars = len(item.select('[class="score-stars"] > [class="icon-star"]')) * '❤'
-        time_text = item.select_one(".time").get_text(strip=True)
-        comment = item.select_one(".content p").get_text(strip=True)
+        content = item.select_one('.content')
+        if content is None:
+            continue
+        comment = content.get_text('\n', strip=True)
+        if not comment:
+            continue
+        stars = len(item.select('.score-stars .icon-star:not(.gray)')) * '❤'
+        time_element = item.select_one('.time')
+        time_text = time_element.get_text(strip=True) if time_element else ''
         results.append({
             "stars": stars,
             "time": time_text,
             "comment": comment
         })
+    if not results:
+        if soup.select_one('form[action*="/login"], form[action*="/sign_in"]'):
+            raise ValueError('Failed to fetch JavDB reviews: login required')
+        if soup.select_one('#challenge-form, #challenge-running') or (
+            soup.title and 'Just a moment' in soup.title.get_text()
+        ):
+            raise ValueError('Failed to fetch JavDB reviews: Cloudflare verification required')
     return results
